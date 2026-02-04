@@ -6,11 +6,11 @@ export default defineConfig({
     monkey({
       entry: 'src/main.ts',
       userscript: {
-        name: 'Pixel Canvas Helper',
+        name: 'Pixel Canvas Helper (you know)',
         namespace: 'https://pixmap.fun/',
-        version: '1.0.0',
+        version: '1.1.0',
         description: 'Canvas enhancement utilities',
-        author: 'Anonymous',
+        author: 'Anonymous (briocheis.cool)',
         match: ['https://pixmap.fun/*', 'https://pixelplanet.fun/*', 'https://pixunivers.fun/*'],
         icon: 'https://briocheis.cool/logo.png',
         grant: 'none',

@@ -60,6 +60,8 @@ export type PlacementStrategy =
 
 export type BotStatus = 'idle' | 'running' | 'stopped' | 'paused' | 'captcha';
 
+export type Theme = 'default' | 'windowsxp';
+
 export interface BotConfig {
   coordinates: string;
   canvasId: string;
@@ -75,6 +77,7 @@ export interface BotConfig {
   followBotUrl: string;
   imageData: ImageData | null;
   imageName: string;
+  theme: Theme;
 }
 
 export interface BotState {
@@ -97,9 +100,24 @@ export interface PanelPosition {
   y: number;
 }
 
+export interface PanelSize {
+  width: number;
+  height: number;
+}
+
+export interface MiscSettings {
+  collapsedSections: string[];
+  soundEnabled: boolean;
+  notificationsEnabled: boolean;
+  autoMinimize: boolean;
+  opacity: number;
+}
+
 export interface SavedState {
   config: BotConfig;
   panelPosition: PanelPosition;
+  panelSize?: PanelSize;
+  miscSettings?: MiscSettings;
   progress?: {
     currentPixelIndex: number;
     imageName: string;
