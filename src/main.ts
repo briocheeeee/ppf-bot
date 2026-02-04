@@ -2,31 +2,31 @@ import { Panel } from './ui/panel';
 import { Logger } from './utils/logger';
 import { initWebSocketHook } from './api/pixmap';
 import { requestNotificationPermission } from './utils/captchaSolver';
-import { maskFingerprint } from './utils/antidetect';
+import { initStealthMode } from './utils/antidetect';
+import { interceptConsoleEarly, preventStackTraceDetection, blockDetectionAPIs } from './utils/consoleIntercept';
+
+interceptConsoleEarly();
+preventStackTraceDetection();
+blockDetectionAPIs();
 
 function main(): void {
-  Logger.info('PPF-Bot starting...');
-  
-  maskFingerprint();
+  initStealthMode();
   initWebSocketHook();
   
   const waitForPage = (): void => {
-    if (document.readyState === 'complete') {
+    const initPanel = (): void => {
       setTimeout(() => {
         const panel = new Panel();
         panel.init();
         requestNotificationPermission();
-        Logger.info('PPF-Bot initialized');
-      }, 1000);
+        Logger.debug('Ready');
+      }, 1500 + Math.random() * 500);
+    };
+    
+    if (document.readyState === 'complete') {
+      initPanel();
     } else {
-      window.addEventListener('load', () => {
-        setTimeout(() => {
-          const panel = new Panel();
-          panel.init();
-          requestNotificationPermission();
-          Logger.info('PPF-Bot initialized');
-        }, 1000);
-      });
+      window.addEventListener('load', initPanel);
     }
   };
 

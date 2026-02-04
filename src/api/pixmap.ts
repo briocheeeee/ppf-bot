@@ -217,7 +217,6 @@ function findSiteWebSocket(): WebSocket | null {
   
   const win = window as unknown as Record<string, unknown>;
   
-  
   const possibleNames = [
     'pixelPlanetWebSocket', 'socket', 'ws', 'webSocket', 
     'ppfunSocket', 'pixelSocket', 'socketClient', '__SOCKET__'
@@ -226,7 +225,6 @@ function findSiteWebSocket(): WebSocket | null {
   for (const name of possibleNames) {
     const val = win[name];
     if (val instanceof WebSocket && val.readyState === WebSocket.OPEN) {
-      Logger.info(`Found existing WebSocket as window.${name}`);
       pixelWebSocket = val;
       setupWebSocketListener(val);
       return val;
@@ -234,7 +232,6 @@ function findSiteWebSocket(): WebSocket | null {
     if (val && typeof val === 'object' && 'ws' in (val as Record<string, unknown>)) {
       const ws = (val as Record<string, unknown>).ws;
       if (ws instanceof WebSocket && ws.readyState === WebSocket.OPEN) {
-        Logger.info(`Found WebSocket in ${name}.ws`);
         pixelWebSocket = ws;
         setupWebSocketListener(ws);
         return ws;
@@ -245,7 +242,6 @@ function findSiteWebSocket(): WebSocket | null {
   const allWebSockets = findAllWebSockets();
   if (allWebSockets.length > 0) {
     const ws = allWebSockets[0];
-    Logger.info(`Found WebSocket via global search: ${ws.url}`);
     pixelWebSocket = ws;
     setupWebSocketListener(ws);
     return ws;
@@ -258,7 +254,7 @@ function findAllWebSockets(): WebSocket[] {
   const sockets: WebSocket[] = [];
   const seen = new Set<WebSocket>();
   
-  function checkValue(val: unknown, path: string, depth: number): void {
+  function checkValue(val: unknown, depth: number): void {
     if (depth > 3) return;
     if (!val || typeof val !== 'object') return;
     
@@ -267,7 +263,6 @@ function findAllWebSockets(): WebSocket[] {
         seen.add(val);
         const url = val.url || '';
         if (url.includes('/ws')) {
-          Logger.debug(`Found WebSocket at ${path}: ${url}`);
           sockets.push(val);
         }
       }
@@ -278,7 +273,6 @@ function findAllWebSockets(): WebSocket[] {
     if (obj.ws instanceof WebSocket && !seen.has(obj.ws)) {
       if (obj.ws.readyState === WebSocket.OPEN) {
         seen.add(obj.ws);
-        Logger.debug(`Found WebSocket at ${path}.ws`);
         sockets.push(obj.ws);
       }
     }
@@ -287,10 +281,8 @@ function findAllWebSockets(): WebSocket[] {
   const win = window as unknown as Record<string, unknown>;
   for (const key of Object.keys(win)) {
     try {
-      checkValue(win[key], `window.${key}`, 0);
-    } catch {
-      // ignore
-    }
+      checkValue(win[key], 0);
+    } catch {}
   }
   
   return sockets;
@@ -307,66 +299,77 @@ function setupWebSocketListener(ws: WebSocket): void {
   });
   
   ws.addEventListener('close', () => {
-    Logger.warn('Site WebSocket closed, attempting reconnect...');
     pixelWebSocket = null;
     listenerAttached = false;
-    setTimeout(() => retryFindWebSocket(), 2000);
+    setTimeout(() => retryFindWebSocket(), 2000 + Math.random() * 1000);
   });
   
-  ws.addEventListener('error', (e) => {
-    Logger.error('WebSocket error occurred', e);
+  ws.addEventListener('error', () => {
     pixelWebSocket = null;
     listenerAttached = false;
-    setTimeout(() => retryFindWebSocket(), 3000);
+    setTimeout(() => retryFindWebSocket(), 3000 + Math.random() * 1000);
   });
-  
-  Logger.info('Attached listener to site WebSocket');
 }
 
 function hookWebSocketCreation(): void {
   const targetWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const OriginalWebSocket = targetWindow.WebSocket;
   
-  targetWindow.WebSocket = class extends OriginalWebSocket {
-    constructor(url: string | URL, protocols?: string | string[]) {
-      super(url, protocols);
+  const stealthyWebSocket = function(this: WebSocket, url: string | URL, protocols?: string | string[]) {
+    const ws = protocols 
+      ? new OriginalWebSocket(url, protocols) 
+      : new OriginalWebSocket(url);
+    
+    const urlStr = url.toString();
+    
+    if (urlStr.includes('/ws')) {
+      ws.addEventListener('open', () => {
+        pixelWebSocket = ws;
+        listenerAttached = false;
+        setupWebSocketListener(ws);
+      });
       
-      const urlStr = url.toString();
-      Logger.debug(`WebSocket created: ${urlStr}`);
-      
-      if (urlStr.includes('/ws')) {
-        Logger.info(`Intercepted site WebSocket: ${urlStr}`);
-        const ws = this as unknown as WebSocket;
-        
-        this.addEventListener('open', () => {
-          Logger.info('Site WebSocket opened - attaching listener');
-          pixelWebSocket = ws;
+      ws.addEventListener('close', () => {
+        if (pixelWebSocket === ws) {
+          pixelWebSocket = null;
           listenerAttached = false;
-          setupWebSocketListener(ws);
-        });
-        
-        this.addEventListener('close', () => {
-          Logger.warn('Site WebSocket closed');
-          if (pixelWebSocket === ws) {
-            pixelWebSocket = null;
-            listenerAttached = false;
-          }
-        });
-      }
+        }
+      });
     }
-  } as typeof WebSocket;
+    
+    return ws;
+  } as unknown as typeof WebSocket;
   
-  Logger.info(`WebSocket hook installed in ${typeof unsafeWindow !== 'undefined' ? 'unsafeWindow' : 'window'}`);
+  stealthyWebSocket.prototype = OriginalWebSocket.prototype;
+  (stealthyWebSocket as any).CONNECTING = OriginalWebSocket.CONNECTING;
+  (stealthyWebSocket as any).OPEN = OriginalWebSocket.OPEN;
+  (stealthyWebSocket as any).CLOSING = OriginalWebSocket.CLOSING;
+  (stealthyWebSocket as any).CLOSED = OriginalWebSocket.CLOSED;
+  
+  Object.defineProperty(stealthyWebSocket, 'name', { value: 'WebSocket', writable: false, configurable: true });
+  Object.defineProperty(stealthyWebSocket, 'toString', { 
+    value: function() { return 'function WebSocket() { [native code] }'; },
+    writable: true,
+    configurable: true
+  });
+  Object.defineProperty(stealthyWebSocket.prototype, 'constructor', {
+    value: stealthyWebSocket,
+    writable: true,
+    configurable: true
+  });
+  
+  Object.defineProperty(targetWindow, 'WebSocket', {
+    value: stealthyWebSocket,
+    writable: true,
+    configurable: true
+  });
 }
 
 export function tryConnectWebSocket(): void {
   const existing = findSiteWebSocket();
   if (existing) {
-    Logger.info('Using existing site WebSocket');
     return;
   }
-  
-  Logger.info('Waiting for site WebSocket to be available...');
   retryFindWebSocket();
 }
 
@@ -378,13 +381,11 @@ function retryFindWebSocket(): void {
     attempts++;
     const ws = findSiteWebSocket();
     if (ws) {
-      Logger.info(`Site WebSocket found after ${attempts} attempts`);
       clearInterval(interval);
     } else if (attempts >= maxAttempts) {
-      Logger.error('Could not find site WebSocket - make sure you are logged in');
       clearInterval(interval);
     }
-  }, 500);
+  }, 500 + Math.random() * 200);
 }
 
 function handleWebSocketMessage(event: MessageEvent): void {
@@ -434,11 +435,10 @@ function handleWebSocketMessage(event: MessageEvent): void {
 
 export function initWebSocketHook(): void {
   hookWebSocketCreation();
-  Logger.info('WebSocket hook initialized');
   
   setTimeout(() => {
     tryConnectWebSocket();
-  }, 1500);
+  }, 1500 + Math.random() * 500);
 }
 
 export type BrushSizeType = 1 | 3 | 5;
@@ -506,7 +506,6 @@ export function placePixelViaWebSocket(
 
     try {
       ws.send(buffer);
-      Logger.debug(`Sent pixel: chunk(${cx},${cy}) offset=${offset} color=${colorIndex}`);
     } catch (err) {
       pendingPixelResolvers.delete(requestId);
       clearTimeout(timeout);

@@ -13,6 +13,7 @@ import {
 import { processImage, ProcessedImage } from './imageProcessor';
 import { Logger } from '../utils/logger';
 import { isCaptchaActive } from '../utils/captchaSolver';
+import { gaussianRandom, shouldTakeBreak, getBreakDuration } from '../utils/antidetect';
 
 type StateChangeCallback = (state: BotState) => void;
 
@@ -295,6 +296,8 @@ export class BotController {
           this.moveCamera(pixel.x, pixel.y);
         }
 
+        await this.maybeHumanBreak(this.state.placedPixels);
+
       } else if (result.captcha || result.error?.includes('Captcha')) {
         Logger.warn('[LOOP] Captcha required - waiting for user to solve');
         this.updateState({ status: 'captcha' });
@@ -417,7 +420,19 @@ export class BotController {
   }
 
   private getPlacementDelay(): number {
-    return this.config.placementDelay;
+    const baseDelay = this.config.placementDelay;
+    if (baseDelay <= 0) {
+      return Math.max(0, gaussianRandom(50, 20));
+    }
+    return Math.max(0, gaussianRandom(baseDelay, baseDelay * 0.2));
+  }
+
+  private async maybeHumanBreak(pixelsPlaced: number): Promise<void> {
+    if (shouldTakeBreak(pixelsPlaced)) {
+      const breakDuration = getBreakDuration();
+      Logger.debug(`Taking human-like break for ${Math.round(breakDuration)}ms`);
+      await new Promise(resolve => setTimeout(resolve, breakDuration));
+    }
   }
 }
 

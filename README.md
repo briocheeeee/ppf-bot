@@ -1,102 +1,63 @@
 # PPF-Bot
 
-TamperMonkey userscript bot for automated pixel placement on pixmap.fun.
+A TamperMonkey/Violentmonkey script I built to automate pixel placement on pixmap.fun. Got tired of clicking manually so I made this.
 
-## Features
+## What it does
 
-- Automated pixel placement with configurable strategies
-- Image import (file or URL)
-- Multiple placement strategies: Line (LTR, RTL, UTB, BTU)
-- Cooldown management with visual countdown
-- Captcha detection with stop/pause options
-- Follow bot mode (configurable endpoint)
-- Draggable Windows XP-style UI panel
-- Persistent state (coordinates, settings, panel position)
-- Progress tracking with ETA
+This bot lets you upload an image and automatically places pixels on the canvas. It handles cooldowns, detects captchas, and has a few different placement strategies depending on how you want to draw.
 
-## Project Structure
+The UI is styled like a roblox cheat because why not. It's draggable and saves your settings between sessions.
 
-```
-ppf-bot/
-├── src/
-│   ├── api/
-│   │   └── pixmap.ts       # PixMap API interactions (WebSocket, chunks)
-│   ├── bot/
-│   │   ├── controller.ts   # Main bot logic and state management
-│   │   └── imageProcessor.ts # Image loading and pixel processing
-│   ├── ui/
-│   │   ├── panel.ts        # UI panel component
-│   │   └── styles.ts       # Windows XP-style CSS
-│   ├── utils/
-│   │   ├── logger.ts       # Console logging utility
-│   │   └── storage.ts      # LocalStorage persistence
-│   ├── types/
-│   │   └── index.ts        # TypeScript type definitions
-│   └── main.ts             # Entry point
-├── dist/
-│   └── ppf-bot.user.js     # Built userscript (after build)
-├── package.json
-├── tsconfig.json
-├── vite.config.ts
-└── README.md
-```
+## Getting started
 
-## Prerequisites
+You'll need Node.js 18 or newer installed.
 
-- Node.js >= 18
-- npm
-
-## Installation
+Clone the repo and install dependencies:
 
 ```bash
 npm install
 ```
 
-## Build
+Build the userscript:
 
 ```bash
 npm run build
 ```
 
-The built userscript will be in `dist/ppf-bot.user.js`.
+The output goes to `dist/ppf-bot.user.js`.
 
-## Development
+If you're developing, run `npm run dev` instead. This starts a dev server with hot reload so you don't have to rebuild every time.
 
-```bash
-npm run dev
-```
+## Installing the script
 
-This starts Vite dev server with hot reload. The userscript will be served at the URL shown in the terminal.
+You need TamperMonkey installed in your browser first. Then either:
 
-## Install Userscript
+- Open `dist/ppf-bot.user.js` after building, copy the contents, and paste into a new TamperMonkey script
+- Point TamperMonkey to the dev server URL if you're running in dev mode
 
-1. Install TamperMonkey browser extension
-2. After building, open `dist/ppf-bot.user.js`
-3. Copy the content and create a new script in TamperMonkey
-4. Or use the dev server URL during development
+## How to use it
 
-## Usage
+Go to pixmap.fun and you'll see the bot panel in the top right. 
 
-1. Navigate to https://pixmap.fun/
-2. The PPF-Bot panel appears in the top-right corner
-3. Configure:
-   - **Coordinates**: Starting position in `x_y` format
-   - **Strategy**: Pixel placement order
-   - **Stop on Captcha**: Stop bot when captcha appears
-   - **Follow Bot**: Enable to follow another bot's commands
-   - **Image**: Load image file or from URL
-4. Click **Start** to begin placement
-5. Click **Stop** to halt
+Load an image either from your computer or paste a URL. Set your starting coordinates in `x_y` format. Pick a placement strategy - left to right, right to left, top to bottom, or bottom to top.
 
-## API Notes
+Hit start and it'll begin placing pixels. The bot respects cooldowns and shows a countdown timer. If a captcha pops up, you can configure it to stop automatically.
 
-PixMap.fun uses WebSocket for pixel placement, not REST API:
-- Canvas data: `GET /chunks/{canvasId}/{cx}/{cy}.bmp`
-- User info: `GET /api/me`
-- Pixel placement: WebSocket binary protocol (opcode 0xC1)
+There's also a follow mode if you want to sync with another bot endpoint, but you probably won't need that unless you're coordinating with others.
+
+## How it works
+
+The code is split into a few parts:
+
+- `src/api/pixmap.ts` - handles WebSocket connection and chunk loading
+- `src/bot/controller.ts` - main bot logic and state
+- `src/bot/imageProcessor.ts` - loads images and processes pixels
+- `src/ui/panel.ts` - the draggable UI panel
+- `src/ui/styles.ts` - Roblox cheat styling
+- `src/utils/` - logging and localStorage stuff
+
+PixMap uses WebSockets for pixel placement (opcode 0xC1), not a REST API. Canvas chunks are loaded as BMPs from `/chunks/{canvasId}/{cx}/{cy}.bmp`.
 
 ## License
 
-MIT
-
-!!!!!!!!!!!!!!! BY CHATGPT !!!!!!!!!!!!!!!
+MIT - do whatever you want with it
