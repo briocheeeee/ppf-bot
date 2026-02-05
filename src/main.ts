@@ -9,28 +9,30 @@ interceptConsoleEarly();
 preventStackTraceDetection();
 blockDetectionAPIs();
 
+let initialized = false;
+
 function main(): void {
   initStealthMode();
   initWebSocketHook();
   
-  const waitForPage = (): void => {
-    const initPanel = (): void => {
-      setTimeout(() => {
-        const panel = new Panel();
-        panel.init();
-        requestNotificationPermission();
-        Logger.debug('Ready');
-      }, 1500 + Math.random() * 500);
-    };
-    
-    if (document.readyState === 'complete') {
-      initPanel();
-    } else {
-      window.addEventListener('load', initPanel);
-    }
+  const initPanel = (): void => {
+    if (initialized) return;
+    initialized = true;
+    setTimeout(() => {
+      const existing = document.getElementById('ppf-bot-panel');
+      if (existing) existing.remove();
+      const panel = new Panel();
+      panel.init();
+      requestNotificationPermission();
+      Logger.debug('Ready');
+    }, 1500 + Math.random() * 500);
   };
-
-  waitForPage();
+  
+  if (document.readyState === 'complete') {
+    initPanel();
+  } else {
+    window.addEventListener('load', initPanel, { once: true });
+  }
 }
 
 main();

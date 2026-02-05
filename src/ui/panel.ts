@@ -128,7 +128,9 @@ export class Panel {
   }
 
   private injectStyles(): void {
+    if (document.getElementById('ppf-bot-styles')) return;
     const style = document.createElement('style');
+    style.id = 'ppf-bot-styles';
     style.textContent = STYLES;
     document.head.appendChild(style);
   }
@@ -388,6 +390,14 @@ export class Panel {
     `;
 
     document.body.appendChild(this.container);
+    
+    if (this.position.x !== 0 || this.position.y !== 0) {
+      this.container.style.left = `${this.position.x}px`;
+      this.container.style.top = `${this.position.y}px`;
+      this.container.style.bottom = 'auto';
+      this.container.style.transform = 'none';
+    }
+    
     this.cacheElements();
   }
 
@@ -1024,12 +1034,13 @@ export class Panel {
   }
 
   private onResetProgress(): void {
-    const stored = localStorage.getItem('ppf-bot-state');
-    if (stored) {
-      const state = JSON.parse(stored);
-      delete state.progress;
-      localStorage.setItem('ppf-bot-state', JSON.stringify(state));
-    }
+    const state = loadState();
+    saveState({
+      config: state.config,
+      panelPosition: state.panelPosition,
+      panelSize: state.panelSize,
+      miscSettings: state.miscSettings,
+    });
     Logger.info('Progress reset');
   }
 
