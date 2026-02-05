@@ -1,18 +1,28 @@
 import { Logger } from './logger';
 
+declare const unsafeWindow: Window & typeof globalThis;
+
+function getPageWindow(): Window & typeof globalThis {
+  try {
+    if (typeof unsafeWindow !== 'undefined') return unsafeWindow;
+  } catch {}
+  return window;
+}
+
+function getPageDocument(): Document {
+  return getPageWindow().document;
+}
+
 let originalTitle = '';
 let captchaDetected = false;
 let checkInterval: number | null = null;
 let onCaptchaSolved: (() => void) | null = null;
 
 export function initCaptchaDetector(onSolved: () => void): void {
-  const host = window.location.hostname;
-  if (!host.includes('pixmap') && !host.includes('pixelplanet') && !host.includes('pixunivers')) return;
-  
   onCaptchaSolved = onSolved;
-  originalTitle = document.title;
+  originalTitle = getPageDocument().title;
   
-  checkInterval = window.setInterval(() => {
+  checkInterval = getPageWindow().setInterval(() => {
     const hasCaptcha = detectCaptcha();
     
     if (hasCaptcha && !captchaDetected) {
@@ -29,25 +39,19 @@ export function initCaptchaDetector(onSolved: () => void): void {
 }
 
 function detectCaptcha(): boolean {
-  const alertBox = document.querySelector('div.Alert.show');
+  const doc = getPageDocument();
+  const alertBox = doc.querySelector('div.Alert.show');
   if (alertBox) {
     const h2 = alertBox.querySelector('h2');
     if (h2 && h2.textContent?.toLowerCase().includes('captcha')) {
       return true;
     }
   }
-  
-  const turnstile = document.querySelector('.cf-turnstile, iframe[src*="challenges.cloudflare"]');
-  if (turnstile) return true;
-  
-  const captchaContainer = document.querySelector('[class*="captcha"], [id*="captcha"]');
-  if (captchaContainer) return true;
-  
   return false;
 }
 
 function notifyUser(): void {
-  document.title = '⚠️ SOLVE CAPTCHA! ⚠️';
+  getPageDocument().title = '⚠️ SOLVE CAPTCHA! ⚠️';
   
   flashTitle();
   
@@ -63,7 +67,7 @@ function notifyUser(): void {
     }
   }
   
-  if (document.hidden) {
+  if (getPageDocument().hidden) {
     try {
       new Audio('data:audio/wav;base64,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').play();
     } catch {}
@@ -97,7 +101,7 @@ function flashTitle(): void {
       }
       return;
     }
-    document.title = showWarning ? '⚠️ SOLVE CAPTCHA! ⚠️' : originalTitle;
+    getPageDocument().title = showWarning ? '⚠️ SOLVE CAPTCHA! ⚠️' : originalTitle;
     showWarning = !showWarning;
   }, 1000);
 }
@@ -107,7 +111,7 @@ function restoreTitle(): void {
     clearInterval(flashInterval);
     flashInterval = null;
   }
-  document.title = originalTitle;
+  getPageDocument().title = originalTitle;
 }
 
 export function isCaptchaActive(): boolean {
@@ -115,7 +119,8 @@ export function isCaptchaActive(): boolean {
 }
 
 export function requestNotificationPermission(): void {
-  if ('Notification' in window && Notification.permission === 'default') {
+  const w = getPageWindow();
+  if ('Notification' in w && Notification.permission === 'default') {
     Notification.requestPermission();
   }
 }

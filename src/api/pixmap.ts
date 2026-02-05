@@ -4,6 +4,9 @@ import { Logger } from '../utils/logger';
 declare const unsafeWindow: Window & typeof globalThis;
 
 function getBaseUrl(): string {
+  try {
+    if (typeof unsafeWindow !== 'undefined') return unsafeWindow.location.origin;
+  } catch {}
   return window.location.origin;
 }
 
