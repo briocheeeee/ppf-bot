@@ -20,8 +20,6 @@ export class Panel {
   private isResizing = false;
   private resizeCorner: 'tl' | 'tr' | 'bl' | 'br' | null = null;
   private resizeStart = { x: 0, y: 0, width: 0, height: 0, posX: 0, posY: 0 };
-  private currentTab: 'main' | 'misc' = 'main';
-
   private elements: {
     canvasSelect: HTMLSelectElement | null;
     coordinatesInput: HTMLInputElement | null;
@@ -45,11 +43,9 @@ export class Panel {
     cooldownValue: HTMLSpanElement | null;
     progressValue: HTMLSpanElement | null;
     endInValue: HTMLSpanElement | null;
-    onlineValue: HTMLSpanElement | null;
     progressBar: HTMLDivElement | null;
     content: HTMLDivElement | null;
     etaValue: HTMLSpanElement | null;
-    errorsValue: HTMLSpanElement | null;
     themeSelect: HTMLSelectElement | null;
     mainTab: HTMLDivElement | null;
     miscTab: HTMLDivElement | null;
@@ -76,11 +72,9 @@ export class Panel {
     cooldownValue: null,
     progressValue: null,
     endInValue: null,
-    onlineValue: null,
     progressBar: null,
     content: null,
     etaValue: null,
-    errorsValue: null,
     themeSelect: null,
     mainTab: null,
     miscTab: null,
@@ -302,9 +296,9 @@ export class Panel {
             </div>
             <div class="ppf-section-content" id="ppf-section-hotkeys">
               <div class="ppf-small" style="padding: 4px 0;">
-                <div style="margin-bottom: 3px;"><strong>Ctrl+S</strong> - Start/Stop bot</div>
-                <div style="margin-bottom: 3px;"><strong>Ctrl+H</strong> - Toggle panel</div>
-                <div style="margin-bottom: 3px;"><strong>Ctrl+M</strong> - Minimize panel</div>
+                <div style="margin-bottom: 3px;"><strong>Space</strong> - Start/Stop bot</div>
+                <div style="margin-bottom: 3px;"><strong>R</strong> - Reset progress</div>
+                <div style="margin-bottom: 3px;"><strong>Escape</strong> - Stop bot</div>
               </div>
             </div>
           </div>
@@ -345,7 +339,7 @@ export class Panel {
             </div>
             <div class="ppf-section-content" id="ppf-section-about">
               <div class="ppf-small" style="padding: 4px 0;">
-                <div style="margin-bottom: 3px;"><strong>Version:</strong> 1.0.0</div>
+                <div style="margin-bottom: 3px;"><strong>Version:</strong> 1.1.0</div>
                 <div style="margin-bottom: 3px;"><strong>Author:</strong> briocheis.cool</div>
                 <div style="margin-bottom: 3px;"><strong>Site:</strong> <a href="https://briocheis.cool" target="_blank" style="color: #4a90e2;">briocheis.cool</a></div>
               </div>
@@ -423,9 +417,7 @@ export class Panel {
     this.elements.statusValue = document.getElementById('ppf-status') as HTMLSpanElement;
     this.elements.cooldownValue = document.getElementById('ppf-cooldown') as HTMLSpanElement;
     this.elements.progressValue = document.getElementById('ppf-progress') as HTMLSpanElement;
-    this.elements.etaValue = document.getElementById('ppf-eta') as HTMLSpanElement;
-    this.elements.errorsValue = document.getElementById('ppf-errors') as HTMLSpanElement;
-    this.elements.onlineValue = document.getElementById('ppf-online') as HTMLSpanElement;
+    this.elements.etaValue = document.getElementById('ppf-eta-display') as HTMLSpanElement;
     this.elements.progressBar = document.getElementById('ppf-progress-bar') as HTMLDivElement;
     this.elements.content = this.container?.querySelector('.ppf-content') as HTMLDivElement;
     this.elements.themeSelect = document.getElementById('ppf-theme') as HTMLSelectElement;
@@ -743,7 +735,7 @@ export class Panel {
   private toggleMinimize(): void {
     this.minimized = !this.minimized;
     if (this.elements.content) {
-      this.elements.content.style.display = this.minimized ? 'none' : 'block';
+      this.elements.content.style.display = this.minimized ? 'none' : '';
     }
   }
 
@@ -760,8 +752,6 @@ export class Panel {
   }
 
   private switchTab(tab: 'main' | 'misc'): void {
-    this.currentTab = tab;
-    
     document.querySelectorAll('.ppf-tab').forEach(t => {
       t.classList.toggle('ppf-tab-active', t.getAttribute('data-tab') === tab);
     });
@@ -1118,12 +1108,20 @@ export class Panel {
       }
     }
     if (this.elements.etaValue) {
-      const mins = Math.floor(state.eta / 60);
-      const secs = state.eta % 60;
-      this.elements.etaValue.textContent = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-    }
-    if (this.elements.errorsValue) {
-      this.elements.errorsValue.textContent = state.errorCount.toString();
+      if (state.eta > 0) {
+        const hours = Math.floor(state.eta / 3600);
+        const mins = Math.floor((state.eta % 3600) / 60);
+        const secs = state.eta % 60;
+        if (hours > 0) {
+          this.elements.etaValue.textContent = `${hours}h ${mins}m`;
+        } else if (mins > 0) {
+          this.elements.etaValue.textContent = `${mins}m ${secs}s`;
+        } else {
+          this.elements.etaValue.textContent = `${secs}s`;
+        }
+      } else {
+        this.elements.etaValue.textContent = '--:--';
+      }
     }
     
     const placedEl = document.getElementById('ppf-placed');
@@ -1134,24 +1132,6 @@ export class Panel {
     
     const speedEl = document.getElementById('ppf-speed');
     if (speedEl) speedEl.textContent = `${state.pixelsPerSecond} px/s`;
-    
-    const etaDisplayEl = document.getElementById('ppf-eta-display');
-    if (etaDisplayEl) {
-      if (state.eta > 0) {
-        const hours = Math.floor(state.eta / 3600);
-        const mins = Math.floor((state.eta % 3600) / 60);
-        const secs = state.eta % 60;
-        if (hours > 0) {
-          etaDisplayEl.textContent = `${hours}h ${mins}m`;
-        } else if (mins > 0) {
-          etaDisplayEl.textContent = `${mins}m ${secs}s`;
-        } else {
-          etaDisplayEl.textContent = `${secs}s`;
-        }
-      } else {
-        etaDisplayEl.textContent = '--:--';
-      }
-    }
 
     if (state.status === 'idle' || state.status === 'stopped') {
       if (this.elements.startBtn) this.elements.startBtn.disabled = false;

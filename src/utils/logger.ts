@@ -13,7 +13,7 @@ export const Logger = {
     if (debugMode) console.warn(`${PREFIX} [WARN]`, ...args);
   },
   error: (...args: unknown[]) => {
-    if (debugMode) console.error(`${PREFIX} [ERROR]`, ...args);
+    console.error(`${PREFIX} [ERROR]`, ...args);
   },
   debug: (...args: unknown[]) => {
     if (debugMode) console.debug(`${PREFIX} [DEBUG]`, ...args);

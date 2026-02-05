@@ -212,5 +212,11 @@ export function blockDetectionAPIs(): void {
       configurable: true
     });
 
+    Object.defineProperty(targetWindow, 'WebSocket', {
+      value: WebSocketProxy,
+      writable: true,
+      configurable: true
+    });
+
   } catch {}
 }

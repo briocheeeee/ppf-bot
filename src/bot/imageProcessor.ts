@@ -178,8 +178,8 @@ function sortPixelsByStrategy(
 
     case 'line-utb':
       sorted.sort((a, b) => {
-        if (a.y !== b.y) return a.y - b.y;
-        return a.x - b.x;
+        if (a.x !== b.x) return a.x - b.x;
+        return a.y - b.y;
       });
       break;
 

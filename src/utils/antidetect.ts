@@ -454,7 +454,6 @@ export function initStealthMode(): void {
   blockExtensionDetection();
   maskFingerprint();
   hideFromDetection();
-  patchWebSocketStealthily();
   preventIframeDetection();
   spoofConnectionProperties();
   hideAutomationMarkers();

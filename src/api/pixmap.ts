@@ -4,9 +4,7 @@ import { Logger } from '../utils/logger';
 declare const unsafeWindow: Window & typeof globalThis;
 
 function getBaseUrl(): string {
-  const host = window.location.hostname;
-  if (host.includes('pixelplanet')) return 'https://pixelplanet.fun';
-  return 'https://pixmap.fun';
+  return window.location.origin;
 }
 
 const BASE_URL = getBaseUrl();

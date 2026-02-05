@@ -60,7 +60,7 @@ export type PlacementStrategy =
 
 export type BotStatus = 'idle' | 'running' | 'stopped' | 'paused' | 'captcha';
 
-export type Theme = 'default' | 'windowsxp';
+export type Theme = 'default' | 'ppf';
 
 export interface BotConfig {
   coordinates: string;

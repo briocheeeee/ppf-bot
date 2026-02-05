@@ -43,6 +43,7 @@ export class BotController {
       followBotUrl: '',
       imageData: null,
       imageName: '',
+      theme: 'default',
     };
 
     this.state = {
@@ -201,11 +202,11 @@ export class BotController {
     };
 
     try {
-      const stored = localStorage.getItem('ppf-bot-state');
+      const stored = localStorage.getItem('windowsxp-bot-state');
       if (stored) {
         const state = JSON.parse(stored);
         state.progress = progress;
-        localStorage.setItem('ppf-bot-state', JSON.stringify(state));
+        localStorage.setItem('windowsxp-bot-state', JSON.stringify(state));
       }
     } catch {
       // ignore
@@ -353,6 +354,8 @@ export class BotController {
         if (!this.running) {
           clearInterval(intervalId);
           this.cooldownIntervals.delete(intervalId);
+          this.updateState({ cooldown: 0 });
+          resolve();
           return;
         }
         const remaining = Math.max(0, endTime - Date.now());
@@ -376,11 +379,13 @@ export class BotController {
   private waitForCaptchaResolution(): Promise<void> {
     return new Promise((resolve) => {
       const checkInterval = window.setInterval(() => {
-        if (!isCaptchaActive()) {
+        if (!this.running || !isCaptchaActive()) {
           clearInterval(checkInterval);
+          this.cooldownIntervals.delete(checkInterval);
           resolve();
         }
       }, 1000);
+      this.cooldownIntervals.add(checkInterval);
     });
   }
 

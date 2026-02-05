@@ -1,7 +1,7 @@
 import { Panel } from './ui/panel';
 import { Logger } from './utils/logger';
 import { initWebSocketHook } from './api/pixmap';
-import { requestNotificationPermission } from './utils/captchaSolver';
+import { requestNotificationPermission, initCaptchaDetector } from './utils/captchaSolver';
 import { initStealthMode } from './utils/antidetect';
 import { interceptConsoleEarly, preventStackTraceDetection, blockDetectionAPIs } from './utils/consoleIntercept';
 
@@ -24,6 +24,9 @@ function main(): void {
       const panel = new Panel();
       panel.init();
       requestNotificationPermission();
+      initCaptchaDetector(() => {
+        Logger.info('Captcha resolved via DOM detector');
+      });
       Logger.debug('Ready');
     }, 1500 + Math.random() * 500);
   };

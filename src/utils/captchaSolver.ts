@@ -6,7 +6,8 @@ let checkInterval: number | null = null;
 let onCaptchaSolved: (() => void) | null = null;
 
 export function initCaptchaDetector(onSolved: () => void): void {
-  if (!window.location.hostname.includes('pixmap')) return;
+  const host = window.location.hostname;
+  if (!host.includes('pixmap') && !host.includes('pixelplanet') && !host.includes('pixunivers')) return;
   
   onCaptchaSolved = onSolved;
   originalTitle = document.title;
