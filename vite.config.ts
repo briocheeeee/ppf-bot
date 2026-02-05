@@ -15,6 +15,8 @@ export default defineConfig({
         icon: 'https://briocheis.cool/logo.png',
         grant: 'none',
         'run-at': 'document-start',
+        downloadURL: 'https://briocheis.cool/ppf-bot.user.js',
+        updateURL: 'https://briocheis.cool/ppf-bot.user.js',
       },
       build: {
         fileName: 'ppf-bot.user.js',
