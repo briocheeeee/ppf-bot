@@ -16,7 +16,18 @@ const CHUNK_SIZE_VAL = 256;
 let cachedMe: MeResponse | null = null;
 let cachedCanvas: CanvasInfo | null = null;
 let cachedCanvasId: number = 0;
+const CHUNK_CACHE_MAX_SIZE = 512;
 let chunkCache: Map<string, Uint8Array> = new Map();
+
+function touchChunkCache(key: string, data: Uint8Array): void {
+  if (chunkCache.has(key)) {
+    chunkCache.delete(key);
+  } else if (chunkCache.size >= CHUNK_CACHE_MAX_SIZE) {
+    const oldest = chunkCache.keys().next().value;
+    if (oldest !== undefined) chunkCache.delete(oldest);
+  }
+  chunkCache.set(key, data);
+}
 let pixelWebSocket: WebSocket | null = null;
 let pendingPixelResolvers: Map<string, (result: PixelPlaceResult) => void> = new Map();
 
@@ -39,11 +50,17 @@ export function getCachedMe(): MeResponse | null {
 export function getMainCanvas(): CanvasInfo | null {
   if (cachedCanvas) return cachedCanvas;
   if (!cachedMe || !cachedMe.canvases) return null;
-  const canvasIdStr = Object.keys(cachedMe.canvases)[0];
-  if (canvasIdStr) {
-    cachedCanvasId = parseInt(canvasIdStr, 10);
-    cachedCanvas = cachedMe.canvases[canvasIdStr];
+  const idStr = String(cachedCanvasId);
+  if (cachedMe.canvases[idStr]) {
+    cachedCanvas = cachedMe.canvases[idStr];
     Logger.info(`Selected canvas ID: ${cachedCanvasId}`);
+    return cachedCanvas;
+  }
+  const fallbackId = Object.keys(cachedMe.canvases)[0];
+  if (fallbackId) {
+    cachedCanvasId = parseInt(fallbackId, 10);
+    cachedCanvas = cachedMe.canvases[fallbackId];
+    Logger.info(`Fallback canvas ID: ${cachedCanvasId}`);
     return cachedCanvas;
   }
   return null;
@@ -51,6 +68,13 @@ export function getMainCanvas(): CanvasInfo | null {
 
 export function getCanvasId(): number {
   return cachedCanvasId;
+}
+
+export function setCanvasId(id: number): void {
+  if (cachedCanvasId !== id) {
+    cachedCanvasId = id;
+    cachedCanvas = null;
+  }
 }
 
 export function getCanvasColors(): number[][] {
@@ -81,7 +105,7 @@ export async function fetchChunk(canvasId: number, cx: number, cy: number): Prom
     const response = await fetch(url, { credentials: 'include' });
     if (response.status === 404) {
       const emptyChunk = new Uint8Array(CHUNK_SIZE_VAL * CHUNK_SIZE_VAL);
-      chunkCache.set(key, emptyChunk);
+      touchChunkCache(key, emptyChunk);
       return emptyChunk;
     }
     if (!response.ok) {
@@ -90,7 +114,7 @@ export async function fetchChunk(canvasId: number, cx: number, cy: number): Prom
     }
     const buffer = await response.arrayBuffer();
     const data = new Uint8Array(buffer);
-    chunkCache.set(key, data);
+    touchChunkCache(key, data);
     return data;
   } catch (err) {
     Logger.error(`Error fetching chunk ${cx},${cy}:`, err);
@@ -113,6 +137,14 @@ export function getPixelFromChunk(
 
 export async function getPixelColor(canvasId: number, x: number, y: number, canvasSize: number): Promise<number | null> {
   const { cx, cy } = pixelToChunk(x, y, canvasSize);
+  const chunkData = await fetchChunk(canvasId, cx, cy);
+  if (!chunkData) return null;
+  return getPixelFromChunk(chunkData, x, y, canvasSize);
+}
+
+export async function getFreshPixelColor(canvasId: number, x: number, y: number, canvasSize: number): Promise<number | null> {
+  const { cx, cy } = pixelToChunk(x, y, canvasSize);
+  invalidateChunkCache(cx, cy, canvasId);
   const chunkData = await fetchChunk(canvasId, cx, cy);
   if (!chunkData) return null;
   return getPixelFromChunk(chunkData, x, y, canvasSize);
@@ -143,7 +175,11 @@ export async function prefetchChunksForPixels(
   Logger.info(`Prefetching ${chunkList.length} chunks...`);
   const startTime = Date.now();
   
-  await Promise.all(chunkList.map(({ cx, cy }) => fetchChunk(canvasId, cx, cy)));
+  const CONCURRENCY = 6;
+  for (let i = 0; i < chunkList.length; i += CONCURRENCY) {
+    const batch = chunkList.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(({ cx, cy }) => fetchChunk(canvasId, cx, cy)));
+  }
   
   const elapsed = Date.now() - startTime;
   Logger.info(`Prefetch complete in ${elapsed}ms`);

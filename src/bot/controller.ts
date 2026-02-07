@@ -5,7 +5,9 @@ import {
   fetchMe, 
   getMainCanvas, 
   getCanvasId,
+  setCanvasId,
   getPixelColorSync,
+  getFreshPixelColor,
   prefetchChunksForPixels,
   placePixelViaWebSocket,
   clearChunkCache 
@@ -59,6 +61,7 @@ export class BotController {
       startTime: null,
       pixelsPerSecond: 0,
       eta: 0,
+      lastCooldownMs: 0,
     };
   }
 
@@ -133,6 +136,8 @@ export class BotController {
       return;
     }
 
+    setCanvasId(parseInt(this.config.canvasId, 10) || 0);
+
     if (!this.canvas) {
       const initialized = await this.initialize();
       if (!initialized) return;
@@ -144,7 +149,8 @@ export class BotController {
       this.config.imageData,
       coords.x,
       coords.y,
-      this.config.strategy
+      this.config.strategy,
+      this.config.brushSize
     );
 
     if (this.processedImage.pixels.length === 0) {
@@ -173,6 +179,7 @@ export class BotController {
       startTime: Date.now(),
       pixelsPerSecond: 0,
       eta: 0,
+      lastCooldownMs: 0,
     });
 
     Logger.info(`Bot started. ${this.processedImage.pixels.length - startIndex} pixels to place`);
@@ -225,29 +232,37 @@ export class BotController {
     let currentIndex = this.state.currentPixelIndex;
     const canvasId = getCanvasId();
 
-    if (!this.config.skipColorCheck && !this.config.repairMode) {
+    if (!this.config.skipColorCheck) {
       Logger.info(`[LOOP] Prefetching chunks for ${pixels.length} pixels...`);
       await prefetchChunksForPixels(canvasId, pixels, this.canvas.size);
     }
 
     while (currentIndex < pixels.length && this.running) {
       if (isCaptchaActive()) {
-        Logger.warn('[LOOP] Captcha active - waiting for user to solve');
-        this.updateState({ status: 'captcha' });
-        await this.waitForCaptchaResolution();
-        this.updateState({ status: 'running' });
-        Logger.info('[LOOP] Captcha resolved - resuming');
+        if (this.config.stopOnCaptcha) {
+          Logger.warn('[LOOP] Captcha active - pausing until solved');
+          this.updateState({ status: 'captcha' });
+          await this.waitForCaptchaResolution();
+          this.updateState({ status: 'running' });
+          Logger.info('[LOOP] Captcha resolved - resuming');
+        } else {
+          Logger.warn('[LOOP] Captcha active - stopping bot');
+          this.updateState({ status: 'stopped' });
+          this.running = false;
+          break;
+        }
       }
 
       const pixel = pixels[currentIndex];
 
-      if (!this.config.skipColorCheck && !this.config.repairMode) {
-        const currentColor = getPixelColorSync(
-          canvasId,
-          pixel.x,
-          pixel.y,
-          this.canvas.size
-        );
+      if (!this.config.skipColorCheck) {
+        let currentColor: number | null;
+
+        if (this.config.repairMode) {
+          currentColor = await getFreshPixelColor(canvasId, pixel.x, pixel.y, this.canvas.size);
+        } else {
+          currentColor = getPixelColorSync(canvasId, pixel.x, pixel.y, this.canvas.size);
+        }
 
         if (currentColor !== null && currentColor === pixel.color) {
           currentIndex++;
@@ -276,17 +291,20 @@ export class BotController {
 
       if (result.success) {
         currentIndex++;
-        const elapsed = Date.now() - (this.state.startTime || Date.now());
-        const pps = elapsed > 0 ? (this.state.placedPixels + 1) / (elapsed / 1000) : 0;
+        const effectiveCooldownMs = result.waitMs > 0 ? result.waitMs : this.state.lastCooldownMs;
+        const cooldownSec = effectiveCooldownMs / 1000;
+        const pps = cooldownSec > 0 ? Math.round((1 / cooldownSec) * 100) / 100 : 0;
         const remaining = pixels.length - currentIndex;
-        const eta = pps > 0 ? Math.round(remaining / pps) : 0;
+        const eta = cooldownSec > 0 ? Math.round(remaining * cooldownSec) : 0;
         
         this.updateState({
           currentPixelIndex: currentIndex,
           placedPixels: this.state.placedPixels + 1,
           progress: Math.round((currentIndex / pixels.length) * 100),
-          pixelsPerSecond: Math.round(pps * 100) / 100,
+          pixelsPerSecond: pps,
           eta,
+          lastCooldownMs: effectiveCooldownMs,
+          errorCount: 0,
         });
 
         if (currentIndex % 10 === 0) {
@@ -300,11 +318,18 @@ export class BotController {
         await this.maybeHumanBreak(this.state.placedPixels);
 
       } else if (result.captcha || result.error?.includes('Captcha')) {
-        Logger.warn('[LOOP] Captcha required - waiting for user to solve');
-        this.updateState({ status: 'captcha' });
-        await this.waitForCaptchaResolution();
-        this.updateState({ status: 'running' });
-        Logger.info('[LOOP] Captcha resolved - resuming');
+        if (this.config.stopOnCaptcha) {
+          Logger.warn('[LOOP] Captcha required - pausing until solved');
+          this.updateState({ status: 'captcha' });
+          await this.waitForCaptchaResolution();
+          this.updateState({ status: 'running' });
+          Logger.info('[LOOP] Captcha resolved - resuming');
+        } else {
+          Logger.warn('[LOOP] Captcha required - stopping bot');
+          this.updateState({ status: 'stopped' });
+          this.running = false;
+          break;
+        }
       } else if (result.error?.includes('Cooldown')) {
         const waitTime = result.waitMs || 120000;
         Logger.info(`[LOOP] Cooldown ${Math.round(waitTime/1000)}s - will retry pixel`);
@@ -314,6 +339,14 @@ export class BotController {
         Logger.info(`[LOOP] Pixel already correct, skipping`);
         currentIndex++;
         this.updateState({ 
+          skippedPixels: this.state.skippedPixels + 1,
+          currentPixelIndex: currentIndex,
+          progress: Math.round((currentIndex / pixels.length) * 100),
+        });
+      } else if (result.error?.includes('Protected pixel')) {
+        Logger.info(`[LOOP] Protected pixel at ${pixel.x},${pixel.y}, skipping`);
+        currentIndex++;
+        this.updateState({
           skippedPixels: this.state.skippedPixels + 1,
           currentPixelIndex: currentIndex,
           progress: Math.round((currentIndex / pixels.length) * 100),
@@ -409,17 +442,16 @@ export class BotController {
   }
 
   getEstimatedTimeRemaining(): string {
-    if (!this.state.startTime || this.state.placedPixels === 0) {
+    if (this.state.lastCooldownMs <= 0) {
       return '--:--';
     }
 
-    const elapsed = Date.now() - this.state.startTime;
-    const avgTimePerPixel = elapsed / this.state.placedPixels;
-    const remaining = this.state.totalPixels - this.state.placedPixels;
-    const estimatedMs = remaining * avgTimePerPixel;
+    const remaining = this.state.totalPixels - this.state.currentPixelIndex;
+    const cooldownSec = this.state.lastCooldownMs / 1000;
+    const estimatedSec = remaining * cooldownSec;
 
-    const hours = Math.floor(estimatedMs / 3600000);
-    const minutes = Math.floor((estimatedMs % 3600000) / 60000);
+    const hours = Math.floor(estimatedSec / 3600);
+    const minutes = Math.floor((estimatedSec % 3600) / 60);
 
     return `${hours}h${minutes.toString().padStart(2, '0')}m`;
   }

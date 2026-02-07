@@ -93,6 +93,7 @@ export interface BotState {
   startTime: number | null;
   pixelsPerSecond: number;
   eta: number;
+  lastCooldownMs: number;
 }
 
 export interface PanelPosition {

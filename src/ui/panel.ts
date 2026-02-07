@@ -17,6 +17,7 @@ export class Panel {
   private isDragging = false;
   private dragOffset = { x: 0, y: 0 };
   private minimized = false;
+  private completionFired = false;
   private isResizing = false;
   private resizeCorner: 'tl' | 'tr' | 'bl' | 'br' | null = null;
   private resizeStart = { x: 0, y: 0, width: 0, height: 0, posX: 0, posY: 0 };
@@ -101,6 +102,7 @@ export class Panel {
     this.updateUIFromConfig();
     this.updateMiscUIFromSettings();
     this.restorePanelSize();
+    this.restoreCollapsedSections();
     
     setupHotkeys(
       () => this.onStart(),
@@ -205,9 +207,9 @@ export class Panel {
         
         <div class="ppf-section">
           <div class="ppf-section-header" data-section="options">
-            <span class="ppf-section-arrow collapsed">▼</span> OPTIONS
+            <span class="ppf-section-arrow">▼</span> OPTIONS
           </div>
-          <div class="ppf-section-content collapsed" id="ppf-section-options">
+          <div class="ppf-section-content" id="ppf-section-options">
             <div class="ppf-checkbox-row">
               <input type="checkbox" class="ppf-checkbox" id="ppf-skip-color-check" />
               <label class="ppf-checkbox-label" for="ppf-skip-color-check">Skip color check</label>
@@ -220,7 +222,7 @@ export class Panel {
               <input type="checkbox" class="ppf-checkbox" id="ppf-follow-bot" />
               <label class="ppf-checkbox-label" for="ppf-follow-bot">Follow camera</label>
             </div>
-            <div class="ppf-row" id="ppf-follow-url-row" style="display:none">
+            <div class="ppf-row ppf-hidden" id="ppf-follow-url-row">
               <label class="ppf-label">URL</label>
               <input type="text" class="ppf-input" id="ppf-follow-url" placeholder="bot url" />
             </div>
@@ -373,6 +375,10 @@ export class Panel {
             <span class="ppf-status-value" id="ppf-eta-display">--:--</span>
           </div>
           <div class="ppf-status-row">
+            <span class="ppf-status-label">errors</span>
+            <span class="ppf-status-value" id="ppf-errors">0</span>
+          </div>
+          <div class="ppf-status-row">
             <span class="ppf-status-label">cooldown</span>
             <span class="ppf-status-value" id="ppf-cooldown">0s</span>
           </div>
@@ -514,9 +520,16 @@ export class Panel {
         const section = header.getAttribute('data-section');
         const content = document.getElementById(`ppf-section-${section}`);
         const arrow = header.querySelector('.ppf-section-arrow');
-        if (content && arrow) {
+        if (content && arrow && section) {
           content.classList.toggle('collapsed');
           arrow.classList.toggle('collapsed');
+          const idx = this.miscSettings.collapsedSections.indexOf(section);
+          if (content.classList.contains('collapsed')) {
+            if (idx === -1) this.miscSettings.collapsedSections.push(section);
+          } else {
+            if (idx !== -1) this.miscSettings.collapsedSections.splice(idx, 1);
+          }
+          this.saveCurrentState();
         }
       });
     });
@@ -525,9 +538,8 @@ export class Panel {
     this.elements.coordinatesInput?.addEventListener('change', () => this.onConfigChange());
     this.elements.brushSizeSelect?.addEventListener('change', () => this.onConfigChange());
     this.elements.strategySelect?.addEventListener('change', () => {
-      this.toggleFollowBotUrl();
+      this.onConfigChange();
       this.toggleTextDrawInput();
-      this.applyTheme(this.config.theme);
     });
     this.elements.textDrawInput?.addEventListener('change', () => this.onConfigChange());
     this.elements.repairModeCheckbox?.addEventListener('change', () => this.onConfigChange());
@@ -571,6 +583,41 @@ export class Panel {
     fileBtn.addEventListener('click', () => this.elements.fileInput?.click());
     this.elements.fileInput?.addEventListener('change', (e) => this.onFileSelect(e));
 
+    const previewEl = document.getElementById('ppf-preview');
+    if (previewEl) {
+      previewEl.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        previewEl.style.borderColor = '#5a5';
+      });
+      previewEl.addEventListener('dragleave', () => {
+        previewEl.style.borderColor = '';
+      });
+      previewEl.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        previewEl.style.borderColor = '';
+        const file = e.dataTransfer?.files?.[0];
+        if (file && file.type.startsWith('image/')) {
+          try {
+            const imageData = await loadImageFromFile(file);
+            this.config.imageData = imageData;
+            this.config.imageName = file.name;
+            if (this.elements.fileNameSpan) {
+              this.elements.fileNameSpan.textContent = file.name;
+            }
+            this.updatePreview(imageData);
+            this.showPixelCount(imageData);
+            botController.updateConfig(this.config);
+            this.saveCurrentState();
+            Logger.info(`Image loaded via drop: ${file.name} (${imageData.width}x${imageData.height})`);
+          } catch (err) {
+            Logger.error('Failed to load dropped image:', err);
+          }
+        }
+      });
+    }
+
     const resetBtn = document.getElementById('ppf-reset-btn') as HTMLButtonElement;
     resetBtn?.addEventListener('click', () => this.onResetProgress());
     
@@ -585,6 +632,7 @@ export class Panel {
             this.elements.fileNameSpan.textContent = this.config.imageName;
           }
           this.updatePreview(imageData);
+          this.showPixelCount(imageData);
           botController.updateConfig(this.config);
           this.saveCurrentState();
           Logger.info(`Image loaded from URL: ${url}`);
@@ -734,9 +782,11 @@ export class Panel {
 
   private toggleMinimize(): void {
     this.minimized = !this.minimized;
-    if (this.elements.content) {
-      this.elements.content.style.display = this.minimized ? 'none' : '';
-    }
+    if (!this.container) return;
+    const tabs = this.container.querySelector('.ppf-tabs') as HTMLElement;
+    const content = this.elements.content;
+    if (tabs) tabs.style.display = this.minimized ? 'none' : '';
+    if (content) content.style.display = this.minimized ? 'none' : '';
   }
 
   private toggleFollowBotUrl(): void {
@@ -948,6 +998,7 @@ export class Panel {
     }
     this.applyTheme(this.config.theme);
     this.toggleFollowBotUrl();
+    this.toggleTextDrawInput();
   }
 
   private onConfigChange(): void {
@@ -981,6 +1032,7 @@ export class Panel {
         this.elements.fileNameSpan.textContent = file.name;
       }
       this.updatePreview(imageData);
+      this.showPixelCount(imageData);
       botController.updateConfig(this.config);
       this.saveCurrentState();
       Logger.info(`Image loaded: ${file.name} (${imageData.width}x${imageData.height})`);
@@ -1012,6 +1064,7 @@ export class Panel {
     }
     
     const savedState = loadState();
+    this.completionFired = false;
     if (this.elements.startBtn) this.elements.startBtn.disabled = true;
     if (this.elements.stopBtn) this.elements.stopBtn.disabled = false;
     await botController.start(savedState.progress);
@@ -1032,6 +1085,25 @@ export class Panel {
       miscSettings: state.miscSettings,
     });
     Logger.info('Progress reset');
+  }
+
+  private showPixelCount(imageData: ImageData): void {
+    const { data, width, height } = imageData;
+    let opaquePixels = 0;
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] >= 128) opaquePixels++;
+    }
+    const preview = document.getElementById('ppf-preview');
+    if (preview) {
+      let countEl = document.getElementById('ppf-pixel-count');
+      if (!countEl) {
+        countEl = document.createElement('div');
+        countEl.id = 'ppf-pixel-count';
+        countEl.style.cssText = 'font-size:9px;color:#888;padding:2px 4px;text-align:center;width:100%;';
+        preview.parentElement?.appendChild(countEl);
+      }
+      countEl.textContent = `${width}x${height} — ${opaquePixels.toLocaleString()} pixels to place`;
+    }
   }
 
   private updatePreview(imageData: ImageData): void {
@@ -1094,7 +1166,7 @@ export class Panel {
       this.elements.statusValue.className = `ppf-status-value ppf-status-${state.status}`;
     }
     if (this.elements.cooldownValue) {
-      this.elements.cooldownValue.textContent = `${Math.round(state.cooldown)}s`;
+      this.elements.cooldownValue.textContent = `${state.cooldown.toFixed(1)}s`;
     }
     if (this.elements.progressValue) {
       this.elements.progressValue.textContent = `${state.progress}%`;
@@ -1133,6 +1205,39 @@ export class Panel {
     const speedEl = document.getElementById('ppf-speed');
     if (speedEl) speedEl.textContent = `${state.pixelsPerSecond} px/s`;
 
+    const sessionTimeEl = document.getElementById('ppf-session-time');
+    if (sessionTimeEl && state.startTime) {
+      const elapsed = Date.now() - state.startTime;
+      const h = Math.floor(elapsed / 3600000);
+      const m = Math.floor((elapsed % 3600000) / 60000);
+      const s = Math.floor((elapsed % 60000) / 1000);
+      sessionTimeEl.textContent = `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+
+    const totalPlacedEl = document.getElementById('ppf-total-placed');
+    if (totalPlacedEl) totalPlacedEl.textContent = state.placedPixels.toString();
+
+    const pixelsHourEl = document.getElementById('ppf-pixels-hour');
+    if (pixelsHourEl) {
+      const pph = state.lastCooldownMs > 0 ? Math.round(3600000 / state.lastCooldownMs) : 0;
+      pixelsHourEl.textContent = pph.toString();
+    }
+
+    const errorsEl = document.getElementById('ppf-errors');
+    if (errorsEl) errorsEl.textContent = state.errorCount.toString();
+
+    if (this.miscSettings.autoMinimize && state.status === 'running' && !this.minimized) {
+      this.toggleMinimize();
+    }
+
+    if ((state.status === 'idle' || state.status === 'stopped') && this.minimized && this.miscSettings.autoMinimize) {
+      this.toggleMinimize();
+    }
+
+    if (state.status === 'idle' && state.progress === 100 && state.totalPixels > 0) {
+      this.onBotCompleted();
+    }
+
     if (state.status === 'idle' || state.status === 'stopped') {
       if (this.elements.startBtn) this.elements.startBtn.disabled = false;
       if (this.elements.stopBtn) this.elements.stopBtn.disabled = true;
@@ -1141,6 +1246,51 @@ export class Panel {
 
   private formatStatus(status: string): string {
     return status.charAt(0).toUpperCase() + status.slice(1);
+  }
+
+  private onBotCompleted(): void {
+    if (this.completionFired) return;
+    this.completionFired = true;
+
+    if (this.miscSettings.soundEnabled) {
+      try {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.setValueAtTime(523, ctx.currentTime);
+        osc.frequency.setValueAtTime(659, ctx.currentTime + 0.15);
+        osc.frequency.setValueAtTime(784, ctx.currentTime + 0.3);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.5);
+      } catch {}
+    }
+
+    if (this.miscSettings.notificationsEnabled && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        const n = new Notification('PPF-Bot: Complete', {
+          body: 'All pixels have been placed.',
+          icon: 'https://pixmap.fun/favicon.ico',
+        });
+        n.onclick = () => { window.focus(); n.close(); };
+      } catch {}
+    }
+  }
+
+  private restoreCollapsedSections(): void {
+    document.querySelectorAll('.ppf-section-content').forEach(el => el.classList.remove('collapsed'));
+    document.querySelectorAll('.ppf-section-arrow').forEach(el => el.classList.remove('collapsed'));
+
+    for (const section of this.miscSettings.collapsedSections) {
+      const content = document.getElementById(`ppf-section-${section}`);
+      const header = document.querySelector(`[data-section="${section}"]`);
+      const arrow = header?.querySelector('.ppf-section-arrow');
+      if (content) content.classList.add('collapsed');
+      if (arrow) arrow.classList.add('collapsed');
+    }
   }
 
   private saveCurrentState(): void {

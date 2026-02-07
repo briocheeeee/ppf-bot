@@ -246,31 +246,41 @@ function sortPixelsByStrategy(
       });
       break;
 
-    case 'spiral-in':
+    case 'spiral-in': {
+      const spInCx = _startX + _width / 2;
+      const spInCy = _startY + _height / 2;
+      const spInMaxR = Math.sqrt((_width / 2) ** 2 + (_height / 2) ** 2) || 1;
       sorted.sort((a, b) => {
-        const centerX = _startX + _width / 2;
-        const centerY = _startY + _height / 2;
-        const angleA = Math.atan2(a.y - centerY, a.x - centerX);
-        const angleB = Math.atan2(b.y - centerY, b.x - centerX);
-        const distA = Math.sqrt((a.x - centerX) ** 2 + (a.y - centerY) ** 2);
-        const distB = Math.sqrt((b.x - centerX) ** 2 + (b.y - centerY) ** 2);
-        if (Math.abs(distA - distB) > 5) return distA - distB;
-        return angleA - angleB;
+        const dA = Math.sqrt((a.x - spInCx) ** 2 + (a.y - spInCy) ** 2);
+        const dB = Math.sqrt((b.x - spInCx) ** 2 + (b.y - spInCy) ** 2);
+        const tA = Math.atan2(a.y - spInCy, a.x - spInCx);
+        const tB = Math.atan2(b.y - spInCy, b.x - spInCx);
+        const turnsA = (1 - dA / spInMaxR);
+        const turnsB = (1 - dB / spInMaxR);
+        const sA = turnsA * Math.PI * 2 + tA;
+        const sB = turnsB * Math.PI * 2 + tB;
+        return sB - sA;
       });
       break;
+    }
 
-    case 'spiral-out':
+    case 'spiral-out': {
+      const spOutCx = _startX + _width / 2;
+      const spOutCy = _startY + _height / 2;
+      const spOutMaxR = Math.sqrt((_width / 2) ** 2 + (_height / 2) ** 2) || 1;
       sorted.sort((a, b) => {
-        const centerX = _startX + _width / 2;
-        const centerY = _startY + _height / 2;
-        const angleA = Math.atan2(a.y - centerY, a.x - centerX);
-        const angleB = Math.atan2(b.y - centerY, b.x - centerX);
-        const distA = Math.sqrt((a.x - centerX) ** 2 + (a.y - centerY) ** 2);
-        const distB = Math.sqrt((b.x - centerX) ** 2 + (b.y - centerY) ** 2);
-        if (Math.abs(distA - distB) > 5) return distB - distA;
-        return angleA - angleB;
+        const dA = Math.sqrt((a.x - spOutCx) ** 2 + (a.y - spOutCy) ** 2);
+        const dB = Math.sqrt((b.x - spOutCx) ** 2 + (b.y - spOutCy) ** 2);
+        const tA = Math.atan2(a.y - spOutCy, a.x - spOutCx);
+        const tB = Math.atan2(b.y - spOutCy, b.x - spOutCx);
+        const turnsA = dA / spOutMaxR;
+        const turnsB = dB / spOutMaxR;
+        const sA = turnsA * Math.PI * 2 + tA;
+        const sB = turnsB * Math.PI * 2 + tB;
+        return sA - sB;
       });
       break;
+    }
 
     case 'random':
       for (let i = sorted.length - 1; i > 0; i--) {
@@ -343,12 +353,13 @@ function sortPixelsByStrategy(
       });
       return scatterResult;
 
-    case 'human':
+    case 'human': {
       const humanResult: PixelData[] = [];
       const humanCopy = [...sorted];
       const pixelLookup = new Map<string, number>();
       humanCopy.forEach((p, i) => pixelLookup.set(`${p.x},${p.y}`, i));
       const usedHuman = new Set<number>();
+      let nextUnused = 0;
       
       const directions = [
         [1, 0], [1, 1], [0, 1], [-1, 1],
@@ -356,21 +367,21 @@ function sortPixelsByStrategy(
       ];
       
       while (usedHuman.size < humanCopy.length) {
-        let startIdx = -1;
-        for (let i = 0; i < humanCopy.length; i++) {
-          if (!usedHuman.has(i)) {
-            startIdx = i;
-            break;
-          }
+        while (nextUnused < humanCopy.length && usedHuman.has(nextUnused)) {
+          nextUnused++;
         }
-        if (startIdx < 0) break;
+        if (nextUnused >= humanCopy.length) break;
+        
+        const startIdx = nextUnused;
+        usedHuman.add(startIdx);
+        humanResult.push(humanCopy[startIdx]);
         
         const dir = directions[Math.floor(Math.random() * directions.length)];
         const strokeLen = 3 + Math.floor(Math.random() * 8);
-        let cx = humanCopy[startIdx].x;
-        let cy = humanCopy[startIdx].y;
+        let cx = humanCopy[startIdx].x + dir[0];
+        let cy = humanCopy[startIdx].y + dir[1];
         
-        for (let s = 0; s < strokeLen; s++) {
+        for (let s = 1; s < strokeLen; s++) {
           const key = `${cx},${cy}`;
           const idx = pixelLookup.get(key);
           if (idx !== undefined && !usedHuman.has(idx)) {
@@ -388,6 +399,7 @@ function sortPixelsByStrategy(
         }
       }
       return humanResult;
+    }
 
     case 'wave':
       const waveCopy = [...sorted];
