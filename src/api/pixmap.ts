@@ -1,4 +1,5 @@
 import type { MeResponse, CanvasInfo, ChunkCoord, PixelPlaceResult } from '../types';
+import { CHUNK_SIZE } from '../types';
 import { Logger } from '../utils/logger';
 
 declare const unsafeWindow: Window & typeof globalThis;
@@ -11,7 +12,6 @@ function getBaseUrl(): string {
 }
 
 const BASE_URL = getBaseUrl();
-const CHUNK_SIZE_VAL = 256;
 
 let cachedMe: MeResponse | null = null;
 let cachedCanvas: CanvasInfo | null = null;
@@ -85,8 +85,8 @@ export function getCanvasColors(): number[][] {
 
 export function pixelToChunk(x: number, y: number, canvasSize: number): ChunkCoord {
   const offset = canvasSize / 2;
-  const cx = Math.floor((x + offset) / CHUNK_SIZE_VAL);
-  const cy = Math.floor((y + offset) / CHUNK_SIZE_VAL);
+  const cx = Math.floor((x + offset) / CHUNK_SIZE);
+  const cy = Math.floor((y + offset) / CHUNK_SIZE);
   return { cx, cy };
 }
 
@@ -104,7 +104,7 @@ export async function fetchChunk(canvasId: number, cx: number, cy: number): Prom
   try {
     const response = await fetch(url, { credentials: 'include' });
     if (response.status === 404) {
-      const emptyChunk = new Uint8Array(CHUNK_SIZE_VAL * CHUNK_SIZE_VAL);
+      const emptyChunk = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
       touchChunkCache(key, emptyChunk);
       return emptyChunk;
     }
@@ -129,9 +129,9 @@ export function getPixelFromChunk(
   canvasSize: number
 ): number {
   const offset = canvasSize / 2;
-  const localX = ((x + offset) % CHUNK_SIZE_VAL + CHUNK_SIZE_VAL) % CHUNK_SIZE_VAL;
-  const localY = ((y + offset) % CHUNK_SIZE_VAL + CHUNK_SIZE_VAL) % CHUNK_SIZE_VAL;
-  const index = localY * CHUNK_SIZE_VAL + localX;
+  const localX = ((x + offset) % CHUNK_SIZE + CHUNK_SIZE) % CHUNK_SIZE;
+  const localY = ((y + offset) % CHUNK_SIZE + CHUNK_SIZE) % CHUNK_SIZE;
+  const index = localY * CHUNK_SIZE + localX;
   return chunkData[index] || 0;
 }
 
@@ -478,14 +478,11 @@ export function initWebSocketHook(): void {
   }, 1500 + Math.random() * 500);
 }
 
-export type BrushSizeType = 1 | 3 | 5;
-
 export function placePixelViaWebSocket(
   x: number,
   y: number,
   colorIndex: number,
-  canvasId: number,
-  brushSize: BrushSizeType = 1
+  canvasId: number
 ): Promise<PixelPlaceResult> {
   return new Promise((resolve) => {
     const canvas = getMainCanvas();
@@ -507,17 +504,13 @@ export function placePixelViaWebSocket(
     const halfSize = canvasSize / 2;
     const absX = x + halfSize;
     const absY = y + halfSize;
-    const localX = absX % CHUNK_SIZE_VAL;
-    const localY = absY % CHUNK_SIZE_VAL;
-    const offset = localX + localY * CHUNK_SIZE_VAL;
-
-    let opcode = 0xC1;
-    if (brushSize === 3) opcode = 0xC2;
-    else if (brushSize === 5) opcode = 0xC3;
+    const localX = absX % CHUNK_SIZE;
+    const localY = absY % CHUNK_SIZE;
+    const offset = localX + localY * CHUNK_SIZE;
 
     const buffer = new ArrayBuffer(1 + 1 + 1 + 4);
     const view = new DataView(buffer);
-    view.setUint8(0, opcode);
+    view.setUint8(0, 0xC1);
     view.setUint8(1, cy);
     view.setUint8(2, cx);
     view.setUint8(3, offset >>> 16);

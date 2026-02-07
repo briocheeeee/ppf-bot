@@ -280,13 +280,11 @@ export class BotController {
         await new Promise(r => setTimeout(r, delay));
       }
 
-      const brushNum = this.config.brushSize === '3x3' ? 3 : this.config.brushSize === '5x5' ? 5 : 1;
       const result = await placePixelViaWebSocket(
         pixel.x,
         pixel.y,
         pixel.color,
-        canvasId,
-        brushNum as 1 | 3 | 5
+        canvasId
       );
 
       if (result.success) {
@@ -355,6 +353,14 @@ export class BotController {
         Logger.error(`[LOOP] Failed: ${result.error}`);
         const errorCount = this.state.errorCount + 1;
         this.updateState({ errorCount });
+
+        if (errorCount >= 10) {
+          Logger.error(`[LOOP] Too many consecutive errors (${errorCount}) - stopping bot`);
+          this.updateState({ status: 'stopped' });
+          this.running = false;
+          break;
+        }
+
         const backoffMs = Math.min(500 * Math.pow(2, Math.min(errorCount - 1, 5)), 16000);
         Logger.debug(`[LOOP] Backoff ${backoffMs}ms (error #${errorCount})`);
         await new Promise(resolve => setTimeout(resolve, backoffMs));
@@ -369,6 +375,19 @@ export class BotController {
     Logger.info(`[LOOP] Loop ended - running=${this.running}, currentIndex=${currentIndex}, totalPixels=${pixels.length}`);
 
     if (this.running && currentIndex >= pixels.length) {
+      if (this.config.repairMode) {
+        Logger.info('[LOOP] Repair cycle complete - restarting from beginning');
+        this.updateState({
+          currentPixelIndex: 0,
+          progress: 0,
+          placedPixels: 0,
+          skippedPixels: 0,
+          errorCount: 0,
+        });
+        clearChunkCache();
+        this.runLoop();
+        return;
+      }
       Logger.info('[LOOP] All pixels placed - marking idle');
       this.updateState({ status: 'idle', progress: 100 });
       this.running = false;

@@ -8,11 +8,6 @@ export interface ProcessedImage {
   pixels: PixelData[];
 }
 
-export interface BrushPixelGroup {
-  centerX: number;
-  centerY: number;
-  pixels: PixelData[];
-}
 
 export function processImage(
   imageData: ImageData,
@@ -29,7 +24,6 @@ export function processImage(
 
   const { width, height, data } = imageData;
   const pixels: PixelData[] = [];
-  const pixelSet = new Set<string>();
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -42,7 +36,6 @@ export function processImage(
       if (a < 128) continue;
 
       const colorIndex = findClosestColorIndex(r, g, b, colors);
-      pixelSet.add(`${x},${y}`);
       pixels.push({
         x: startX + x,
         y: startY + y,
@@ -51,105 +44,37 @@ export function processImage(
     }
   }
 
-  let finalPixels: PixelData[];
-  
-  if (brushSize === '1x1') {
-    finalPixels = pixels;
-  } else {
-    finalPixels = groupPixelsForBrush(pixels, pixelSet, brushSize, width, height, startX, startY);
-  }
-
-  const sortedPixels = sortPixelsByStrategy(finalPixels, strategy, startX, startY, width, height);
+  const expandedPixels = expandBrush(pixels, brushSize);
+  const sortedPixels = sortPixelsByStrategy(expandedPixels, strategy, startX, startY, width, height);
 
   Logger.info(`Processed image: ${width}x${height}, ${sortedPixels.length} pixels (brush: ${brushSize})`);
   return { width, height, pixels: sortedPixels };
 }
 
-function groupPixelsForBrush(
-  pixels: PixelData[],
-  pixelSet: Set<string>,
-  brushSize: BrushSize,
-  imgWidth: number,
-  imgHeight: number,
-  startX: number,
-  startY: number
-): PixelData[] {
-  const size = brushSize === '3x3' ? 3 : 5;
-  const half = Math.floor(size / 2);
-  const result: PixelData[] = [];
-  const processed = new Set<string>();
-  
-  const colorMap = new Map<string, number>();
-  pixels.forEach(p => {
-    const localX = p.x - startX;
-    const localY = p.y - startY;
-    colorMap.set(`${localX},${localY}`, p.color);
-  });
+function expandBrush(pixels: PixelData[], brushSize: BrushSize): PixelData[] {
+  if (brushSize === '1x1') return pixels;
 
-  for (let cy = half; cy < imgHeight - half; cy += size) {
-    for (let cx = half; cx < imgWidth - half; cx += size) {
-      let validCount = 0;
-      let dominantColor = -1;
-      const colorCounts = new Map<number, number>();
-      
-      for (let dy = -half; dy <= half; dy++) {
-        for (let dx = -half; dx <= half; dx++) {
-          const lx = cx + dx;
-          const ly = cy + dy;
-          const key = `${lx},${ly}`;
-          
-          if (pixelSet.has(key)) {
-            validCount++;
-            const color = colorMap.get(key);
-            if (color !== undefined) {
-              colorCounts.set(color, (colorCounts.get(color) || 0) + 1);
-            }
-          }
-        }
-      }
-      
-      const totalBrushPixels = size * size;
-      if (validCount >= totalBrushPixels * 0.7) {
-        let maxCount = 0;
-        colorCounts.forEach((count, color) => {
-          if (count > maxCount) {
-            maxCount = count;
-            dominantColor = color;
-          }
-        });
-        
-        if (dominantColor >= 0) {
-          const centerKey = `${cx},${cy}`;
-          if (!processed.has(centerKey)) {
-            processed.add(centerKey);
-            result.push({
-              x: startX + cx,
-              y: startY + cy,
-              color: dominantColor,
-            });
-            
-            for (let dy = -half; dy <= half; dy++) {
-              for (let dx = -half; dx <= half; dx++) {
-                processed.add(`${cx + dx},${cy + dy}`);
-              }
-            }
-          }
+  const radius = brushSize === '3x3' ? 1 : 2;
+  const seen = new Set<string>();
+  const expanded: PixelData[] = [];
+
+  for (const pixel of pixels) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = pixel.x + dx;
+        const ny = pixel.y + dy;
+        const key = `${nx},${ny}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          expanded.push({ x: nx, y: ny, color: pixel.color });
         }
       }
     }
   }
-  
-  pixels.forEach(p => {
-    const localX = p.x - startX;
-    const localY = p.y - startY;
-    const key = `${localX},${localY}`;
-    if (!processed.has(key)) {
-      result.push(p);
-    }
-  });
-  
-  return result;
+
+  return expanded;
 }
+
 
 function sortPixelsByStrategy(
   pixels: PixelData[],
@@ -302,11 +227,11 @@ function sortPixelsByStrategy(
       break;
 
     case 'center-out':
-      const _cCenterX = _startX + _width / 2;
-      const _cCenterY = _startY + _height / 2;
       sorted.sort((a, b) => {
-        const distA = Math.sqrt(Math.pow(a.x - _cCenterX, 2) + Math.pow(a.y - _cCenterY, 2));
-        const distB = Math.sqrt(Math.pow(b.x - _cCenterX, 2) + Math.pow(b.y - _cCenterY, 2));
+        const centerX = _startX + _width / 2;
+        const centerY = _startY + _height / 2;
+        const distA = Math.sqrt((a.x - centerX) ** 2 + (a.y - centerY) ** 2);
+        const distB = Math.sqrt((b.x - centerX) ** 2 + (b.y - centerY) ** 2);
         return distA - distB;
       });
       break;

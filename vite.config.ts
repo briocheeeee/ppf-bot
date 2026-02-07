@@ -10,7 +10,7 @@ export default defineConfig({
         namespace: 'https://pixmap.fun/',
         version: '1.1.0',
         description: 'Canvas enhancement utilities',
-        author: 'Anonymous (briocheis.cool)',
+        author: 'Anonymous (brioche)',
         match: ['https://pixmap.fun/*', 'https://pixelplanet.fun/*', 'https://pixunivers.fun/*'],
         icon: 'https://briocheis.cool/logo.png',
         grant: 'none',
