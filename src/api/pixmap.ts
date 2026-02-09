@@ -13,11 +13,44 @@ function getBaseUrl(): string {
 
 const BASE_URL = getBaseUrl();
 
+const nativeFetch: typeof fetch = (() => {
+  try {
+    if (typeof unsafeWindow !== 'undefined' && unsafeWindow.fetch) {
+      return unsafeWindow.fetch.bind(unsafeWindow);
+    }
+  } catch {}
+  return window.fetch.bind(window);
+})();
+
+function isPixelyaSite(): boolean {
+  return BASE_URL.includes('pixelya.fun');
+}
+
+export { isPixelyaSite };
+
 let cachedMe: MeResponse | null = null;
 let cachedCanvas: CanvasInfo | null = null;
 let cachedCanvasId: number = 0;
 const CHUNK_CACHE_MAX_SIZE = 512;
 let chunkCache: Map<string, Uint8Array> = new Map();
+const localPixelOverlay: Map<string, number> = new Map();
+
+function getOverlayKey(canvasId: number, x: number, y: number): string {
+  return `${canvasId}_${x}_${y}`;
+}
+
+export function setLocalPixel(canvasId: number, x: number, y: number, color: number): void {
+  localPixelOverlay.set(getOverlayKey(canvasId, x, y), color);
+}
+
+export function getLocalPixel(canvasId: number, x: number, y: number): number | null {
+  const val = localPixelOverlay.get(getOverlayKey(canvasId, x, y));
+  return val !== undefined ? val : null;
+}
+
+export function clearLocalPixelOverlay(): void {
+  localPixelOverlay.clear();
+}
 
 function touchChunkCache(key: string, data: Uint8Array): void {
   if (chunkCache.has(key)) {
@@ -32,7 +65,7 @@ let pixelWebSocket: WebSocket | null = null;
 let pendingPixelResolvers: Map<string, (result: PixelPlaceResult) => void> = new Map();
 
 export async function fetchMe(): Promise<MeResponse> {
-  const response = await fetch(`${BASE_URL}/api/me`, {
+  const response = await nativeFetch(`${BASE_URL}/api/me`, {
     credentials: 'include',
   });
   if (!response.ok) {
@@ -40,6 +73,12 @@ export async function fetchMe(): Promise<MeResponse> {
   }
   const data = await response.json();
   cachedMe = data;
+  if (data.canvases) {
+    for (const [id, canvas] of Object.entries(data.canvases)) {
+      const c = canvas as CanvasInfo;
+      Logger.info(`Canvas ${id}: "${c.title}" size=${c.size} cli=${c.cli} bcd=${c.bcd} cds=${c.cds}`);
+    }
+  }
   return data;
 }
 
@@ -68,6 +107,27 @@ export function getMainCanvas(): CanvasInfo | null {
 
 export function getCanvasId(): number {
   return cachedCanvasId;
+}
+
+export function detectCanvasIdFromHash(): number | null {
+  const hash = window.location.hash.replace('#', '');
+  if (!hash) return null;
+  const letter = hash.split(',')[0];
+  if (!letter || letter.length !== 1 || !/^[a-zA-Z]$/.test(letter)) return null;
+  if (!cachedMe || !cachedMe.canvases) return null;
+  const letterLower = letter.toLowerCase();
+  Logger.info(`Detecting canvas from hash letter: "${letterLower}"`);
+  for (const [id, canvas] of Object.entries(cachedMe.canvases)) {
+    const idx = canvas.cli;
+    const canvasLetter = String.fromCharCode(97 + idx);
+    Logger.info(`  Canvas ${id}: cli=${idx} -> letter="${canvasLetter}"`);
+    if (canvasLetter === letterLower) {
+      Logger.info(`  MATCH: hash letter "${letterLower}" -> canvas ID ${id}`);
+      return parseInt(id, 10);
+    }
+  }
+  Logger.warn(`No canvas found for hash letter "${letterLower}"`);
+  return null;
 }
 
 export function setCanvasId(id: number): void {
@@ -102,7 +162,7 @@ export async function fetchChunk(canvasId: number, cx: number, cy: number): Prom
 
   const url = `${BASE_URL}/chunks/${canvasId}/${cx}/${cy}.bmp`;
   try {
-    const response = await fetch(url, { credentials: 'include' });
+    const response = await nativeFetch(url, { credentials: 'include' });
     if (response.status === 404) {
       const emptyChunk = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
       touchChunkCache(key, emptyChunk);
@@ -143,6 +203,8 @@ export async function getPixelColor(canvasId: number, x: number, y: number, canv
 }
 
 export async function getFreshPixelColor(canvasId: number, x: number, y: number, canvasSize: number): Promise<number | null> {
+  const local = getLocalPixel(canvasId, x, y);
+  if (local !== null) return local;
   const { cx, cy } = pixelToChunk(x, y, canvasSize);
   invalidateChunkCache(cx, cy, canvasId);
   const chunkData = await fetchChunk(canvasId, cx, cy);
@@ -191,6 +253,8 @@ export function getPixelColorSync(
   y: number,
   canvasSize: number
 ): number | null {
+  const local = getLocalPixel(canvasId, x, y);
+  if (local !== null) return local;
   const { cx, cy } = pixelToChunk(x, y, canvasSize);
   const key = `${canvasId}_${cx}_${cy}`;
   const chunkData = chunkCache.get(key);
@@ -251,14 +315,14 @@ function findSiteWebSocket(): WebSocket | null {
   if (pixelWebSocket && pixelWebSocket.readyState === WebSocket.OPEN) {
     return pixelWebSocket;
   }
-  
+
   const win = window as unknown as Record<string, unknown>;
-  
+
   const possibleNames = [
-    'pixelPlanetWebSocket', 'socket', 'ws', 'webSocket', 
+    'pixelPlanetWebSocket', 'socket', 'ws', 'webSocket',
     'ppfunSocket', 'pixelSocket', 'socketClient', '__SOCKET__'
   ];
-  
+
   for (const name of possibleNames) {
     const val = win[name];
     if (val instanceof WebSocket && val.readyState === WebSocket.OPEN) {
@@ -275,7 +339,7 @@ function findSiteWebSocket(): WebSocket | null {
       }
     }
   }
-  
+
   const allWebSockets = findAllWebSockets();
   if (allWebSockets.length > 0) {
     const ws = allWebSockets[0];
@@ -283,18 +347,18 @@ function findSiteWebSocket(): WebSocket | null {
     setupWebSocketListener(ws);
     return ws;
   }
-  
+
   return null;
 }
 
 function findAllWebSockets(): WebSocket[] {
   const sockets: WebSocket[] = [];
   const seen = new Set<WebSocket>();
-  
+
   function checkValue(val: unknown, depth: number): void {
     if (depth > 3) return;
     if (!val || typeof val !== 'object') return;
-    
+
     if (val instanceof WebSocket) {
       if (!seen.has(val) && val.readyState === WebSocket.OPEN) {
         seen.add(val);
@@ -305,7 +369,7 @@ function findAllWebSockets(): WebSocket[] {
       }
       return;
     }
-    
+
     const obj = val as Record<string, unknown>;
     if (obj.ws instanceof WebSocket && !seen.has(obj.ws)) {
       if (obj.ws.readyState === WebSocket.OPEN) {
@@ -314,14 +378,22 @@ function findAllWebSockets(): WebSocket[] {
       }
     }
   }
-  
-  const win = window as unknown as Record<string, unknown>;
-  for (const key of Object.keys(win)) {
-    try {
-      checkValue(win[key], 0);
-    } catch {}
+
+  const windows: Record<string, unknown>[] = [window as unknown as Record<string, unknown>];
+  try {
+    if (typeof unsafeWindow !== 'undefined' && unsafeWindow !== window) {
+      windows.push(unsafeWindow as unknown as Record<string, unknown>);
+    }
+  } catch {}
+
+  for (const win of windows) {
+    for (const key of Object.keys(win)) {
+      try {
+        checkValue(win[key], 0);
+      } catch {}
+    }
   }
-  
+
   return sockets;
 }
 
@@ -330,17 +402,17 @@ let listenerAttached = false;
 function setupWebSocketListener(ws: WebSocket): void {
   if (listenerAttached) return;
   listenerAttached = true;
-  
+
   ws.addEventListener('message', (event: MessageEvent) => {
     handleWebSocketMessage(event);
   });
-  
+
   ws.addEventListener('close', () => {
     pixelWebSocket = null;
     listenerAttached = false;
     setTimeout(() => retryFindWebSocket(), 2000 + Math.random() * 1000);
   });
-  
+
   ws.addEventListener('error', () => {
     pixelWebSocket = null;
     listenerAttached = false;
@@ -351,55 +423,104 @@ function setupWebSocketListener(ws: WebSocket): void {
 function hookWebSocketCreation(): void {
   const targetWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const OriginalWebSocket = targetWindow.WebSocket;
-  
-  const stealthyWebSocket = function(this: WebSocket, url: string | URL, protocols?: string | string[]) {
-    const ws = protocols 
-      ? new OriginalWebSocket(url, protocols) 
-      : new OriginalWebSocket(url);
-    
-    const urlStr = url.toString();
-    
-    if (urlStr.includes('/ws')) {
-      ws.addEventListener('open', () => {
-        pixelWebSocket = ws;
-        listenerAttached = false;
-        setupWebSocketListener(ws);
-      });
-      
-      ws.addEventListener('close', () => {
-        if (pixelWebSocket === ws) {
-          pixelWebSocket = null;
-          listenerAttached = false;
-        }
-      });
+
+  const originalSend = OriginalWebSocket.prototype.send;
+  OriginalWebSocket.prototype.send = function(this: WebSocket, data: any) {
+    if (!pixelWebSocket && this.url && this.url.includes('/ws') && this.readyState === WebSocket.OPEN) {
+      pixelWebSocket = this;
+      listenerAttached = false;
+      setupWebSocketListener(this);
     }
-    
-    return ws;
-  } as unknown as typeof WebSocket;
-  
-  stealthyWebSocket.prototype = OriginalWebSocket.prototype;
-  (stealthyWebSocket as any).CONNECTING = OriginalWebSocket.CONNECTING;
-  (stealthyWebSocket as any).OPEN = OriginalWebSocket.OPEN;
-  (stealthyWebSocket as any).CLOSING = OriginalWebSocket.CLOSING;
-  (stealthyWebSocket as any).CLOSED = OriginalWebSocket.CLOSED;
-  
-  Object.defineProperty(stealthyWebSocket, 'name', { value: 'WebSocket', writable: false, configurable: true });
-  Object.defineProperty(stealthyWebSocket, 'toString', { 
-    value: function() { return 'function WebSocket() { [native code] }'; },
-    writable: true,
-    configurable: true
-  });
-  Object.defineProperty(stealthyWebSocket.prototype, 'constructor', {
-    value: stealthyWebSocket,
-    writable: true,
-    configurable: true
-  });
-  
-  Object.defineProperty(targetWindow, 'WebSocket', {
-    value: stealthyWebSocket,
-    writable: true,
-    configurable: true
-  });
+    return originalSend.call(this, data);
+  };
+
+  if (isPixelyaSite()) {
+    const WebSocketProxy = new Proxy(OriginalWebSocket, {
+      construct(target, args) {
+        const urlStr = String(args[0]);
+
+        if (urlStr.includes('127.0.0.1') || urlStr.includes('localhost')) {
+          throw new DOMException('Failed to construct \'WebSocket\': An insecure WebSocket connection may not be initiated from a page loaded over HTTPS.', 'SecurityError');
+        }
+
+        const ws: WebSocket = args.length > 1
+          ? new target(args[0], args[1])
+          : new target(args[0]);
+
+        if (urlStr.includes('/ws')) {
+          ws.addEventListener('open', () => {
+            pixelWebSocket = ws;
+            listenerAttached = false;
+            setupWebSocketListener(ws);
+          });
+
+          ws.addEventListener('close', () => {
+            if (pixelWebSocket === ws) {
+              pixelWebSocket = null;
+              listenerAttached = false;
+            }
+          });
+        }
+
+        return ws;
+      },
+    });
+
+    Object.defineProperty(targetWindow, 'WebSocket', {
+      value: WebSocketProxy,
+      writable: true,
+      configurable: true,
+    });
+  } else {
+    const stealthyWebSocket = function(this: WebSocket, url: string | URL, protocols?: string | string[]) {
+      const ws = protocols
+        ? new OriginalWebSocket(url, protocols)
+        : new OriginalWebSocket(url);
+
+      const urlStr = url.toString();
+
+      if (urlStr.includes('/ws')) {
+        ws.addEventListener('open', () => {
+          pixelWebSocket = ws;
+          listenerAttached = false;
+          setupWebSocketListener(ws);
+        });
+
+        ws.addEventListener('close', () => {
+          if (pixelWebSocket === ws) {
+            pixelWebSocket = null;
+            listenerAttached = false;
+          }
+        });
+      }
+
+      return ws;
+    } as unknown as typeof WebSocket;
+
+    stealthyWebSocket.prototype = OriginalWebSocket.prototype;
+    (stealthyWebSocket as any).CONNECTING = OriginalWebSocket.CONNECTING;
+    (stealthyWebSocket as any).OPEN = OriginalWebSocket.OPEN;
+    (stealthyWebSocket as any).CLOSING = OriginalWebSocket.CLOSING;
+    (stealthyWebSocket as any).CLOSED = OriginalWebSocket.CLOSED;
+
+    Object.defineProperty(stealthyWebSocket, 'name', { value: 'WebSocket', writable: false, configurable: true });
+    Object.defineProperty(stealthyWebSocket, 'toString', {
+      value: function() { return 'function WebSocket() { [native code] }'; },
+      writable: true,
+      configurable: true
+    });
+    Object.defineProperty(stealthyWebSocket.prototype, 'constructor', {
+      value: stealthyWebSocket,
+      writable: true,
+      configurable: true
+    });
+
+    Object.defineProperty(targetWindow, 'WebSocket', {
+      value: stealthyWebSocket,
+      writable: true,
+      configurable: true,
+    });
+  }
 }
 
 export function tryConnectWebSocket(): void {
@@ -433,46 +554,51 @@ function handleWebSocketMessage(event: MessageEvent): void {
   
   if (opcode === 0xC3 && pendingPixelResolvers.size > 0) {
     const retCode = data.getInt8(1);
-    const waitMs = data.getUint32(2, false);
-    const cooldownMs = data.getInt16(6, false);
+    const rawWait = data.getUint32(2, false);
+    const rawCooldown = data.getInt16(6, false);
     
     const resolver = pendingPixelResolvers.values().next().value;
     if (resolver) {
       const key = pendingPixelResolvers.keys().next().value as string;
       if (key) pendingPixelResolvers.delete(key);
       
-      Logger.debug(`Pixel response: retCode=${retCode} waitMs=${waitMs} cooldownMs=${cooldownMs}`);
+      const waitMs = rawWait;
+      const cooldownMs = rawCooldown;
+      const pixelsAvailable = waitMs <= 0 ? 1 : 0;
+      const maxPixels = 0;
+
+      Logger.debug(`WS: retCode=${retCode} waitMs=${waitMs} cooldownMs=${cooldownMs}`);
       
+      const base = { waitMs, cooldownMs, pixelsAvailable, maxPixels };
+
       if (retCode === 0) {
-        resolver({ success: true, waitMs, cooldownMs });
+        resolver({ success: true, ...base });
       } else if (retCode === 5) {
-        if (waitMs > 0) {
-          resolver({ success: false, waitMs, cooldownMs, error: 'Cooldown not expired' });
-        } else {
-          resolver({ success: false, waitMs, cooldownMs, error: 'Pixel already correct color' });
-        }
+        resolver({ success: false, ...base, error: 'Pixel already correct color' });
       } else if (retCode === 9) {
-        resolver({ success: false, waitMs, cooldownMs, error: 'Cooldown not expired' });
+        resolver({ success: false, ...base, error: 'Cooldown not expired' });
       } else if (retCode === 10) {
-        resolver({ success: false, waitMs, cooldownMs, error: 'Captcha required', captcha: true });
+        resolver({ success: false, ...base, error: 'Captcha required', captcha: true });
       } else if (retCode === 1) {
-        resolver({ success: false, waitMs, cooldownMs, error: 'Invalid canvas' });
+        resolver({ success: false, ...base, error: 'Invalid canvas' });
       } else if (retCode === 2) {
-        resolver({ success: false, waitMs, cooldownMs, error: 'Invalid coordinates' });
+        resolver({ success: false, ...base, error: 'Invalid coordinates' });
       } else if (retCode === 3) {
-        resolver({ success: false, waitMs, cooldownMs, error: 'Invalid color' });
+        resolver({ success: false, ...base, error: 'Invalid color' });
       } else if (retCode === 4) {
-        resolver({ success: false, waitMs, cooldownMs, error: 'Protected pixel' });
+        resolver({ success: false, ...base, error: 'Protected pixel' });
       } else {
-        resolver({ success: false, waitMs, cooldownMs, error: `Unknown error code: ${retCode}` });
+        resolver({ success: false, ...base, error: `Unknown error code: ${retCode}` });
       }
     }
   }
 }
 
-export function initWebSocketHook(): void {
+export function hookWebSocketEarly(): void {
   hookWebSocketCreation();
-  
+}
+
+export function initWebSocketHook(): void {
   setTimeout(() => {
     tryConnectWebSocket();
   }, 1500 + Math.random() * 500);
@@ -487,26 +613,28 @@ export function placePixelViaWebSocket(
   return new Promise((resolve) => {
     const canvas = getMainCanvas();
     if (!canvas) {
-      resolve({ success: false, waitMs: 0, cooldownMs: 0, error: 'No canvas info' });
+      resolve({ success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: 'No canvas info' });
       return;
     }
 
     const ws = findSiteWebSocket();
-    
+
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      resolve({ success: false, waitMs: 0, cooldownMs: 0, error: 'WebSocket not connected. Please refresh the page.' });
+      resolve({ success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: 'WebSocket not connected. Please refresh the page.' });
       return;
     }
 
     const canvasSize = canvas.size;
     const { cx, cy } = pixelToChunk(x, y, canvasSize);
-    
+
     const halfSize = canvasSize / 2;
     const absX = x + halfSize;
     const absY = y + halfSize;
     const localX = absX % CHUNK_SIZE;
     const localY = absY % CHUNK_SIZE;
     const offset = localX + localY * CHUNK_SIZE;
+
+    Logger.debug(`Place: world(${x},${y}) canvas=${canvasId} size=${canvasSize} chunk(${cx},${cy}) local(${localX},${localY}) offset=${offset} color=${colorIndex}`);
 
     const buffer = new ArrayBuffer(1 + 1 + 1 + 4);
     const view = new DataView(buffer);
@@ -522,7 +650,7 @@ export function placePixelViaWebSocket(
     const timeout = setTimeout(() => {
       if (pendingPixelResolvers.has(requestId)) {
         pendingPixelResolvers.delete(requestId);
-        resolve({ success: false, waitMs: 0, cooldownMs: 0, error: 'Timeout waiting for response' });
+        resolve({ success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: 'Timeout waiting for response' });
       }
     }, 10000);
 
@@ -539,7 +667,7 @@ export function placePixelViaWebSocket(
     } catch (err) {
       pendingPixelResolvers.delete(requestId);
       clearTimeout(timeout);
-      resolve({ success: false, waitMs: 0, cooldownMs: 0, error: `Send error: ${err}` });
+      resolve({ success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: `Send error: ${err}` });
     }
   });
 }

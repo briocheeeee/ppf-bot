@@ -1,7 +1,8 @@
 export function setupHotkeys(
   onStart: () => void,
   onStop: () => void,
-  onReset: () => void
+  onReset: () => void,
+  onToggleMinimize?: () => void
 ): void {
   document.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
@@ -24,6 +25,9 @@ export function setupHotkeys(
     } else if (e.code === 'Escape') {
       e.preventDefault();
       onStop();
+    } else if (e.code === 'KeyM' && !e.ctrlKey && !e.metaKey && onToggleMinimize) {
+      e.preventDefault();
+      onToggleMinimize();
     }
   });
 }

@@ -1,25 +1,33 @@
 import { Panel } from './ui/panel';
 import { Logger } from './utils/logger';
-import { initWebSocketHook } from './api/pixmap';
+import { hookWebSocketEarly, initWebSocketHook } from './api/pixmap';
 import { requestNotificationPermission, initCaptchaDetector } from './utils/captchaSolver';
 import { initStealthMode } from './utils/antidetect';
 import { interceptConsoleEarly, preventStackTraceDetection, blockDetectionAPIs } from './utils/consoleIntercept';
 
-interceptConsoleEarly();
-preventStackTraceDetection();
-blockDetectionAPIs();
+hookWebSocketEarly();
+
+const isPixelya = window.location.hostname.includes('pixelya.fun');
+
+if (!isPixelya) {
+  interceptConsoleEarly();
+  preventStackTraceDetection();
+  blockDetectionAPIs();
+}
 
 let initialized = false;
 
 function main(): void {
-  initStealthMode();
+  if (!isPixelya) {
+    initStealthMode();
+  }
   initWebSocketHook();
   
   const initPanel = (): void => {
     if (initialized) return;
     initialized = true;
     setTimeout(() => {
-      const existing = document.getElementById('ppf-bot-panel');
+      const existing = document.getElementById('ppf-bot-shadow-host');
       if (existing) existing.remove();
       const panel = new Panel();
       panel.init();

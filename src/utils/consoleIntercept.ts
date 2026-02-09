@@ -179,43 +179,23 @@ export function blockDetectionAPIs(): void {
       return originalFetch.call(this, input, init);
     };
 
-    const OriginalWebSocket = targetWindow.WebSocket;
-    const WebSocketProxy = new Proxy(OriginalWebSocket, {
-      construct(target, args: any[]) {
-        const url = args[0];
-        const urlStr = typeof url === 'string' ? url : url.toString();
+    const CurrentWebSocket = targetWindow.WebSocket;
+    const WebSocketProxy = new Proxy(CurrentWebSocket, {
+      construct(target, args) {
+        const urlStr = String(args[0]);
         
         if (urlStr.includes('127.0.0.1') || urlStr.includes('localhost')) {
           throw new DOMException('Failed to construct WebSocket', 'SecurityError');
         }
         
-        const protocols = args[1];
-        return protocols ? new target(url, protocols) : new target(url);
+        return args.length > 1 ? new target(args[0], args[1]) : new target(args[0]);
       }
-    });
-
-    Object.setPrototypeOf(WebSocketProxy, OriginalWebSocket);
-    Object.setPrototypeOf(WebSocketProxy.prototype, OriginalWebSocket.prototype);
-    (WebSocketProxy as any).CONNECTING = OriginalWebSocket.CONNECTING;
-    (WebSocketProxy as any).OPEN = OriginalWebSocket.OPEN;
-    (WebSocketProxy as any).CLOSING = OriginalWebSocket.CLOSING;
-    (WebSocketProxy as any).CLOSED = OriginalWebSocket.CLOSED;
-
-    Object.defineProperty(WebSocketProxy, 'name', {
-      value: 'WebSocket',
-      writable: false
-    });
-
-    Object.defineProperty(WebSocketProxy, 'toString', {
-      value: function() { return 'function WebSocket() { [native code] }'; },
-      writable: true,
-      configurable: true
     });
 
     Object.defineProperty(targetWindow, 'WebSocket', {
       value: WebSocketProxy,
       writable: true,
-      configurable: true
+      configurable: true,
     });
 
   } catch {}

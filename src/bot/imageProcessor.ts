@@ -44,35 +44,10 @@ export function processImage(
     }
   }
 
-  const expandedPixels = expandBrush(pixels, brushSize);
-  const sortedPixels = sortPixelsByStrategy(expandedPixels, strategy, startX, startY, width, height);
+  const sortedPixels = sortPixelsByStrategy(pixels, strategy, startX, startY, width, height);
 
   Logger.info(`Processed image: ${width}x${height}, ${sortedPixels.length} pixels (brush: ${brushSize})`);
   return { width, height, pixels: sortedPixels };
-}
-
-function expandBrush(pixels: PixelData[], brushSize: BrushSize): PixelData[] {
-  if (brushSize === '1x1') return pixels;
-
-  const radius = brushSize === '3x3' ? 1 : 2;
-  const seen = new Set<string>();
-  const expanded: PixelData[] = [];
-
-  for (const pixel of pixels) {
-    for (let dy = -radius; dy <= radius; dy++) {
-      for (let dx = -radius; dx <= radius; dx++) {
-        const nx = pixel.x + dx;
-        const ny = pixel.y + dy;
-        const key = `${nx},${ny}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          expanded.push({ x: nx, y: ny, color: pixel.color });
-        }
-      }
-    }
-  }
-
-  return expanded;
 }
 
 
@@ -284,42 +259,102 @@ function sortPixelsByStrategy(
       const pixelLookup = new Map<string, number>();
       humanCopy.forEach((p, i) => pixelLookup.set(`${p.x},${p.y}`, i));
       const usedHuman = new Set<number>();
-      let nextUnused = 0;
-      
-      const directions = [
-        [1, 0], [1, 1], [0, 1], [-1, 1],
-        [-1, 0], [-1, -1], [0, -1], [1, -1]
-      ];
-      
-      while (usedHuman.size < humanCopy.length) {
-        while (nextUnused < humanCopy.length && usedHuman.has(nextUnused)) {
-          nextUnused++;
+
+      const findNearestUnused = (fx: number, fy: number, maxRadius: number): number => {
+        let bestIdx = -1;
+        let bestDist = Infinity;
+        const r = Math.ceil(maxRadius);
+        for (let dy = -r; dy <= r; dy++) {
+          for (let dx = -r; dx <= r; dx++) {
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > maxRadius) continue;
+            const idx = pixelLookup.get(`${fx + dx},${fy + dy}`);
+            if (idx !== undefined && !usedHuman.has(idx) && dist < bestDist) {
+              bestDist = dist;
+              bestIdx = idx;
+            }
+          }
         }
-        if (nextUnused >= humanCopy.length) break;
-        
-        const startIdx = nextUnused;
+        return bestIdx;
+      };
+
+      const pickRandomUnused = (): number => {
+        const remaining: number[] = [];
+        for (let i = 0; i < humanCopy.length; i++) {
+          if (!usedHuman.has(i)) remaining.push(i);
+        }
+        if (remaining.length === 0) return -1;
+        return remaining[Math.floor(Math.random() * remaining.length)];
+      };
+
+      let cursorX = 0;
+      let cursorY = 0;
+      let hasPosition = false;
+
+      while (usedHuman.size < humanCopy.length) {
+        let startIdx: number;
+        if (hasPosition && Math.random() < 0.7) {
+          const jumpRadius = 3 + Math.floor(Math.random() * 12);
+          startIdx = findNearestUnused(cursorX, cursorY, jumpRadius);
+          if (startIdx === -1) {
+            startIdx = findNearestUnused(cursorX, cursorY, 50);
+          }
+          if (startIdx === -1) {
+            startIdx = pickRandomUnused();
+          }
+        } else {
+          startIdx = pickRandomUnused();
+        }
+        if (startIdx === -1) break;
+
         usedHuman.add(startIdx);
         humanResult.push(humanCopy[startIdx]);
-        
-        const dir = directions[Math.floor(Math.random() * directions.length)];
-        const strokeLen = 3 + Math.floor(Math.random() * 8);
-        let cx = humanCopy[startIdx].x + dir[0];
-        let cy = humanCopy[startIdx].y + dir[1];
-        
-        for (let s = 1; s < strokeLen; s++) {
-          const key = `${cx},${cy}`;
-          const idx = pixelLookup.get(key);
-          if (idx !== undefined && !usedHuman.has(idx)) {
-            usedHuman.add(idx);
-            humanResult.push(humanCopy[idx]);
+        cursorX = humanCopy[startIdx].x;
+        cursorY = humanCopy[startIdx].y;
+        hasPosition = true;
+
+        let angle = Math.random() * Math.PI * 2;
+        const strokeLen = 5 + Math.floor(Math.random() * 25);
+        const curvature = (Math.random() - 0.5) * 0.6;
+        const speed = 1.2 + Math.random() * 1.8;
+
+        let sx = cursorX;
+        let sy = cursorY;
+        let missStreak = 0;
+
+        for (let s = 0; s < strokeLen; s++) {
+          angle += curvature + (Math.random() - 0.5) * 0.4;
+          sx += Math.cos(angle) * speed;
+          sy += Math.sin(angle) * speed;
+
+          const rx = Math.round(sx);
+          const ry = Math.round(sy);
+
+          const scanRadius = 2;
+          let bestScanIdx = -1;
+          let bestScanDist = Infinity;
+          for (let sdy = -scanRadius; sdy <= scanRadius; sdy++) {
+            for (let sdx = -scanRadius; sdx <= scanRadius; sdx++) {
+              const idx = pixelLookup.get(`${rx + sdx},${ry + sdy}`);
+              if (idx !== undefined && !usedHuman.has(idx)) {
+                const d = Math.abs(sdx) + Math.abs(sdy);
+                if (d < bestScanDist) {
+                  bestScanDist = d;
+                  bestScanIdx = idx;
+                }
+              }
+            }
           }
-          
-          cx += dir[0];
-          cy += dir[1];
-          
-          if (Math.random() < 0.2) {
-            cx += Math.floor(Math.random() * 3) - 1;
-            cy += Math.floor(Math.random() * 3) - 1;
+
+          if (bestScanIdx !== -1) {
+            usedHuman.add(bestScanIdx);
+            humanResult.push(humanCopy[bestScanIdx]);
+            cursorX = humanCopy[bestScanIdx].x;
+            cursorY = humanCopy[bestScanIdx].y;
+            missStreak = 0;
+          } else {
+            missStreak++;
+            if (missStreak > 4) break;
           }
         }
       }

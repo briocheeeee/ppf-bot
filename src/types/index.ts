@@ -94,6 +94,8 @@ export interface BotState {
   pixelsPerSecond: number;
   eta: number;
   lastCooldownMs: number;
+  pixelStock: number;
+  maxPixelStock: number;
 }
 
 export interface PanelPosition {
@@ -111,6 +113,7 @@ export interface MiscSettings {
   soundEnabled: boolean;
   notificationsEnabled: boolean;
   autoMinimize: boolean;
+  autoResume: boolean;
   opacity: number;
 }
 
@@ -124,12 +127,15 @@ export interface SavedState {
     imageName: string;
     coordinates: string;
   };
+  imageDataUrl?: string;
 }
 
 export interface PixelPlaceResult {
   success: boolean;
   waitMs: number;
   cooldownMs: number;
+  pixelsAvailable: number;
+  maxPixels: number;
   error?: string;
   captcha?: boolean;
 }

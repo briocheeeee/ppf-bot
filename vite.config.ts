@@ -11,7 +11,7 @@ export default defineConfig({
         version: '1.1.0',
         description: 'Canvas enhancement utilities',
         author: 'Anonymous (brioche)',
-        match: ['https://pixmap.fun/*', 'https://pixelplanet.fun/*', 'https://pixunivers.fun/*'],
+        match: ['https://pixmap.fun/*', 'https://pixelplanet.fun/*', 'https://pixunivers.fun/*', 'https://pixelya.fun/*'],
         icon: 'https://briocheis.cool/logo.png',
         grant: 'none',
         'run-at': 'document-start',

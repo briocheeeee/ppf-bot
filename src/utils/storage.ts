@@ -35,6 +35,7 @@ const DEFAULT_MISC: MiscSettings = {
   soundEnabled: true,
   notificationsEnabled: true,
   autoMinimize: false,
+  autoResume: false,
   opacity: 100,
 };
 
@@ -42,13 +43,15 @@ export function loadState(): SavedState {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
-      const parsed = JSON.parse(stored) as SavedState;
+      const parsed = JSON.parse(stored) as Record<string, unknown>;
+      const config = parsed.config as Partial<BotConfig> | undefined;
       return {
-        config: { ...DEFAULT_CONFIG, ...parsed.config, imageData: null },
-        panelPosition: parsed.panelPosition || DEFAULT_POSITION,
-        panelSize: parsed.panelSize || DEFAULT_SIZE,
-        miscSettings: { ...DEFAULT_MISC, ...parsed.miscSettings },
-        progress: parsed.progress,
+        config: { ...DEFAULT_CONFIG, ...config, imageData: null },
+        panelPosition: (parsed.panelPosition as PanelPosition) || DEFAULT_POSITION,
+        panelSize: (parsed.panelSize as PanelSize) || DEFAULT_SIZE,
+        miscSettings: { ...DEFAULT_MISC, ...(parsed.miscSettings as Partial<MiscSettings>) },
+        progress: parsed.progress as SavedState['progress'],
+        imageDataUrl: (parsed.imageDataUrl as string) || undefined,
       };
     }
   } catch {
@@ -62,14 +65,71 @@ export function loadState(): SavedState {
   };
 }
 
+export function restoreImageData(): Promise<ImageData | null> {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed.imageDataUrl && typeof parsed.imageDataUrl === 'string') {
+        return dataUrlToImageData(parsed.imageDataUrl);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return Promise.resolve(null);
+}
+
+export function imageDataToDataUrl(imageData: ImageData): string | null {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = imageData.width;
+    canvas.height = imageData.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.putImageData(imageData, 0, 0);
+    const dataUrl = canvas.toDataURL('image/png');
+    if (dataUrl.length > 2 * 1024 * 1024) return null;
+    return dataUrl;
+  } catch {
+    return null;
+  }
+}
+
+function dataUrlToImageData(dataUrl: string): Promise<ImageData | null> {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { resolve(null); return; }
+        ctx.drawImage(img, 0, 0);
+        resolve(ctx.getImageData(0, 0, img.width, img.height));
+      };
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 export function saveState(state: SavedState): void {
   try {
-    const toSave: SavedState = {
+    let savedImageDataUrl: string | null = null;
+    if (state.config.imageData) {
+      savedImageDataUrl = imageDataToDataUrl(state.config.imageData);
+    }
+    const toSave = {
       config: { ...state.config, imageData: null },
       panelPosition: state.panelPosition,
       panelSize: state.panelSize,
       miscSettings: state.miscSettings,
       progress: state.progress,
+      imageDataUrl: savedImageDataUrl,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
   } catch {

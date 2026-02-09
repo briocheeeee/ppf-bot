@@ -10,7 +10,11 @@ import {
   getFreshPixelColor,
   prefetchChunksForPixels,
   placePixelViaWebSocket,
-  clearChunkCache 
+  clearChunkCache,
+  clearLocalPixelOverlay,
+  setLocalPixel,
+  getExistingWebSocket,
+  tryConnectWebSocket,
 } from '../api/pixmap';
 import { processImage, ProcessedImage } from './imageProcessor';
 import { Logger } from '../utils/logger';
@@ -62,6 +66,8 @@ export class BotController {
       pixelsPerSecond: 0,
       eta: 0,
       lastCooldownMs: 0,
+      pixelStock: 0,
+      maxPixelStock: 0,
     };
   }
 
@@ -144,6 +150,7 @@ export class BotController {
     }
 
     clearChunkCache();
+    clearLocalPixelOverlay();
 
     this.processedImage = processImage(
       this.config.imageData,
@@ -220,6 +227,16 @@ export class BotController {
     }
   }
 
+  private async waitForWebSocket(maxWaitMs: number = 10000): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < maxWaitMs) {
+      const ws = getExistingWebSocket();
+      if (ws && ws.readyState === WebSocket.OPEN) return true;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    return false;
+  }
+
   private async runLoop(): Promise<void> {
     Logger.info(`[LOOP] Starting runLoop - running=${this.running}`);
     
@@ -227,6 +244,15 @@ export class BotController {
       Logger.warn(`[LOOP] Early exit - running=${this.running}, hasImage=${!!this.processedImage}, hasCanvas=${!!this.canvas}`);
       return;
     }
+
+    const wsReady = await this.waitForWebSocket();
+    if (!wsReady) {
+      Logger.error('[LOOP] WebSocket not available after 10s - stopping');
+      this.updateState({ status: 'stopped' });
+      this.running = false;
+      return;
+    }
+    Logger.info('[LOOP] WebSocket connected');
 
     const pixels = this.processedImage.pixels;
     let currentIndex = this.state.currentPixelIndex;
@@ -254,8 +280,9 @@ export class BotController {
       }
 
       const pixel = pixels[currentIndex];
+      const brushOffsets = this.getBrushOffsets();
 
-      if (!this.config.skipColorCheck) {
+      if (!this.config.skipColorCheck && brushOffsets.length === 1) {
         let currentColor: number | null;
 
         if (this.config.repairMode) {
@@ -275,95 +302,125 @@ export class BotController {
         }
       }
 
-      const delay = this.getPlacementDelay();
-      if (delay > 0) {
-        await new Promise(r => setTimeout(r, delay));
+      let brushPlacedAny = false;
+
+      for (const offset of brushOffsets) {
+        if (!this.running) break;
+
+        const bx = pixel.x + offset.dx;
+        const by = pixel.y + offset.dy;
+
+        if (!this.config.skipColorCheck) {
+          let currentColor: number | null;
+          if (this.config.repairMode) {
+            currentColor = await getFreshPixelColor(canvasId, bx, by, this.canvas.size);
+          } else {
+            currentColor = getPixelColorSync(canvasId, bx, by, this.canvas.size);
+          }
+          if (currentColor !== null && currentColor === pixel.color) {
+            continue;
+          }
+        }
+
+        let placed = false;
+        while (!placed && this.running) {
+          const delay = this.getPlacementDelay();
+          if (delay > 0) {
+            await new Promise(r => setTimeout(r, delay));
+          }
+
+          const result = await placePixelViaWebSocket(bx, by, pixel.color, canvasId);
+
+          if (result.success) {
+            placed = true;
+            brushPlacedAny = true;
+            setLocalPixel(canvasId, bx, by, pixel.color);
+
+            const placedTotal = this.state.placedPixels + 1;
+            const effectiveCooldownMs = result.waitMs > 0 ? result.waitMs : this.state.lastCooldownMs;
+            const cooldownSec = effectiveCooldownMs / 1000;
+            const pps = cooldownSec > 0 ? Math.round((1 / cooldownSec) * 100) / 100 : 0;
+            const remaining = pixels.length - currentIndex;
+            const eta = cooldownSec > 0 ? Math.round(remaining * cooldownSec) : 0;
+
+            this.updateState({
+              placedPixels: placedTotal,
+              pixelsPerSecond: pps,
+              eta,
+              lastCooldownMs: effectiveCooldownMs,
+              errorCount: 0,
+            });
+
+            if (this.config.followBot) {
+              this.moveCamera(bx, by);
+            }
+
+          } else if (result.captcha || result.error?.includes('Captcha')) {
+            if (this.config.stopOnCaptcha) {
+              Logger.warn('[LOOP] Captcha required - pausing until solved');
+              this.updateState({ status: 'captcha' });
+              await this.waitForCaptchaResolution();
+              this.updateState({ status: 'running' });
+              Logger.info('[LOOP] Captcha resolved - resuming');
+            } else {
+              Logger.warn('[LOOP] Captcha required - stopping bot');
+              this.updateState({ status: 'stopped' });
+              this.running = false;
+              break;
+            }
+          } else if (result.error?.includes('Cooldown')) {
+            const waitTime = result.waitMs || 120000;
+            Logger.info(`[LOOP] Cooldown ${Math.round(waitTime/1000)}s - will retry pixel`);
+            await this.waitCooldown(waitTime);
+            Logger.info(`[LOOP] Cooldown done, running=${this.running}`);
+          } else if (result.error?.includes('already correct color')) {
+            placed = true;
+          } else if (result.error?.includes('Protected pixel')) {
+            Logger.info(`[LOOP] Protected pixel at ${bx},${by}, skipping`);
+            placed = true;
+          } else {
+            Logger.error(`[LOOP] Failed: ${result.error}`);
+            const errorCount = this.state.errorCount + 1;
+            this.updateState({ errorCount });
+
+            if (errorCount >= 5 && errorCount % 5 === 0) {
+              Logger.warn(`[LOOP] ${errorCount} consecutive errors - attempting WebSocket reconnection`);
+              tryConnectWebSocket();
+              await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 2000));
+              const ws = getExistingWebSocket();
+              if (!ws || ws.readyState !== WebSocket.OPEN) {
+                Logger.warn(`[LOOP] WebSocket still disconnected after reconnect attempt`);
+              } else {
+                Logger.info(`[LOOP] WebSocket reconnected successfully`);
+                this.updateState({ errorCount: 0 });
+                continue;
+              }
+            }
+
+            if (errorCount >= 20) {
+              Logger.error(`[LOOP] Too many consecutive errors (${errorCount}) - stopping bot`);
+              this.updateState({ status: 'stopped' });
+              this.running = false;
+              break;
+            }
+
+            const backoffMs = Math.min(500 * Math.pow(2, Math.min(errorCount - 1, 5)), 16000);
+            Logger.debug(`[LOOP] Backoff ${backoffMs}ms (error #${errorCount})`);
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+          }
+        }
       }
 
-      const result = await placePixelViaWebSocket(
-        pixel.x,
-        pixel.y,
-        pixel.color,
-        canvasId
-      );
+      currentIndex++;
+      this.updateState({
+        currentPixelIndex: currentIndex,
+        progress: Math.round((currentIndex / pixels.length) * 100),
+        skippedPixels: brushPlacedAny ? this.state.skippedPixels : this.state.skippedPixels + 1,
+      });
+      this.saveProgress();
 
-      if (result.success) {
-        currentIndex++;
-        const effectiveCooldownMs = result.waitMs > 0 ? result.waitMs : this.state.lastCooldownMs;
-        const cooldownSec = effectiveCooldownMs / 1000;
-        const pps = cooldownSec > 0 ? Math.round((1 / cooldownSec) * 100) / 100 : 0;
-        const remaining = pixels.length - currentIndex;
-        const eta = cooldownSec > 0 ? Math.round(remaining * cooldownSec) : 0;
-        
-        this.updateState({
-          currentPixelIndex: currentIndex,
-          placedPixels: this.state.placedPixels + 1,
-          progress: Math.round((currentIndex / pixels.length) * 100),
-          pixelsPerSecond: pps,
-          eta,
-          lastCooldownMs: effectiveCooldownMs,
-          errorCount: 0,
-        });
-
-        if (currentIndex % 10 === 0) {
-          this.saveProgress();
-        }
-
-        if (this.config.followBot) {
-          this.moveCamera(pixel.x, pixel.y);
-        }
-
+      if (brushPlacedAny) {
         await this.maybeHumanBreak(this.state.placedPixels);
-
-      } else if (result.captcha || result.error?.includes('Captcha')) {
-        if (this.config.stopOnCaptcha) {
-          Logger.warn('[LOOP] Captcha required - pausing until solved');
-          this.updateState({ status: 'captcha' });
-          await this.waitForCaptchaResolution();
-          this.updateState({ status: 'running' });
-          Logger.info('[LOOP] Captcha resolved - resuming');
-        } else {
-          Logger.warn('[LOOP] Captcha required - stopping bot');
-          this.updateState({ status: 'stopped' });
-          this.running = false;
-          break;
-        }
-      } else if (result.error?.includes('Cooldown')) {
-        const waitTime = result.waitMs || 120000;
-        Logger.info(`[LOOP] Cooldown ${Math.round(waitTime/1000)}s - will retry pixel`);
-        await this.waitCooldown(waitTime);
-        Logger.info(`[LOOP] Cooldown done, running=${this.running}`);
-      } else if (result.error?.includes('already correct color')) {
-        Logger.info(`[LOOP] Pixel already correct, skipping`);
-        currentIndex++;
-        this.updateState({ 
-          skippedPixels: this.state.skippedPixels + 1,
-          currentPixelIndex: currentIndex,
-          progress: Math.round((currentIndex / pixels.length) * 100),
-        });
-      } else if (result.error?.includes('Protected pixel')) {
-        Logger.info(`[LOOP] Protected pixel at ${pixel.x},${pixel.y}, skipping`);
-        currentIndex++;
-        this.updateState({
-          skippedPixels: this.state.skippedPixels + 1,
-          currentPixelIndex: currentIndex,
-          progress: Math.round((currentIndex / pixels.length) * 100),
-        });
-      } else {
-        Logger.error(`[LOOP] Failed: ${result.error}`);
-        const errorCount = this.state.errorCount + 1;
-        this.updateState({ errorCount });
-
-        if (errorCount >= 10) {
-          Logger.error(`[LOOP] Too many consecutive errors (${errorCount}) - stopping bot`);
-          this.updateState({ status: 'stopped' });
-          this.running = false;
-          break;
-        }
-
-        const backoffMs = Math.min(500 * Math.pow(2, Math.min(errorCount - 1, 5)), 16000);
-        Logger.debug(`[LOOP] Backoff ${backoffMs}ms (error #${errorCount})`);
-        await new Promise(resolve => setTimeout(resolve, backoffMs));
       }
       
       if (!this.running) {
@@ -385,6 +442,7 @@ export class BotController {
           errorCount: 0,
         });
         clearChunkCache();
+        clearLocalPixelOverlay();
         this.runLoop();
         return;
       }
@@ -473,6 +531,19 @@ export class BotController {
     const minutes = Math.floor((estimatedSec % 3600) / 60);
 
     return `${hours}h${minutes.toString().padStart(2, '0')}m`;
+  }
+
+  private getBrushOffsets(): { dx: number; dy: number }[] {
+    const brushSize = this.config.brushSize;
+    if (brushSize === '1x1') return [{ dx: 0, dy: 0 }];
+    const radius = brushSize === '3x3' ? 1 : 2;
+    const offsets: { dx: number; dy: number }[] = [];
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        offsets.push({ dx, dy });
+      }
+    }
+    return offsets;
   }
 
   private getPlacementDelay(): number {
