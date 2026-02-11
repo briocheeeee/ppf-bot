@@ -225,16 +225,6 @@ export class BotController {
     }
   }
 
-  private async waitForWebSocket(maxWaitMs: number = 10000): Promise<boolean> {
-    const start = Date.now();
-    while (Date.now() - start < maxWaitMs) {
-      const ws = getExistingWebSocket();
-      if (ws && ws.readyState === WebSocket.OPEN) return true;
-      await new Promise(r => setTimeout(r, 500));
-    }
-    return false;
-  }
-
   private async runLoop(): Promise<void> {
     Logger.info(`[LOOP] Starting runLoop - running=${this.running}`);
     
@@ -243,14 +233,8 @@ export class BotController {
       return;
     }
 
-    const wsReady = await this.waitForWebSocket();
-    if (!wsReady) {
-      Logger.error('[LOOP] WebSocket not available after 10s - stopping');
-      this.updateState({ status: 'stopped' });
-      this.running = false;
-      return;
-    }
-    Logger.info('[LOOP] WebSocket connected');
+    tryConnectWebSocket();
+    Logger.info('[LOOP] Pixel placement via HTTP API');
 
     const pixels = this.processedImage.pixels;
     let currentIndex = this.state.currentPixelIndex;
