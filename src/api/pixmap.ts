@@ -485,9 +485,22 @@ function findAllWebSockets(): WebSocket[] {
 
 let listenerAttached = false;
 
+function sendRegisterCanvas(ws: WebSocket): void {
+  try {
+    const buffer = new ArrayBuffer(2);
+    const view = new DataView(buffer);
+    view.setInt8(0, 0xA0);
+    view.setInt8(1, cachedCanvasId);
+    ws.send(buffer);
+    Logger.debug(`Sent RegisterCanvas for canvas ${cachedCanvasId}`);
+  } catch {}
+}
+
 function setupWebSocketListener(ws: WebSocket): void {
   if (listenerAttached) return;
   listenerAttached = true;
+
+  sendRegisterCanvas(ws);
 
   ws.addEventListener('message', (event: MessageEvent) => {
     handleWebSocketMessage(event);
@@ -638,38 +651,42 @@ function handleWebSocketMessage(event: MessageEvent): void {
   const data = new DataView(event.data);
   const opcode = data.getUint8(0);
 
-  if (opcode === 0xC1 && data.byteLength >= 7) {
-    const cy = data.getUint8(1);
-    const cx = data.getUint8(2);
-    const offsetHigh = data.getUint8(3);
-    const offsetLow = data.getUint16(4, false);
-    const offset = (offsetHigh << 16) | offsetLow;
-    const color = data.getUint8(6);
+  if (opcode === 0x91 && data.byteLength >= 7) {
+    const ci = data.getUint8(1);
+    const cj = data.getUint8(2);
     const cId = cachedCanvasId;
-    const key = `${cId}_${cx}_${cy}`;
+    const key = `${cId}_${ci}_${cj}`;
     const chunkData = chunkCache.get(key);
-    if (chunkData && offset < chunkData.length) {
-      chunkData[offset] = color;
-    }
     const canvas = getMainCanvas();
-    if (canvas) {
-      const canvasSize = canvas.size;
-      const halfSize = canvasSize / 2;
-      const localX = offset % CHUNK_SIZE;
-      const localY = Math.floor(offset / CHUNK_SIZE);
-      const worldX = cx * CHUNK_SIZE + localX - halfSize;
-      const worldY = cy * CHUNK_SIZE + localY - halfSize;
-      const overlayKey = getOverlayKey(cId, worldX, worldY);
-      if (localPixelOverlay.has(overlayKey)) {
-        localPixelOverlay.set(overlayKey, color);
+    let off = data.byteLength;
+    while (off > 3) {
+      const color = data.getUint8(off -= 1);
+      const offsetL = data.getUint16(off -= 2);
+      const offsetH = data.getUint8(off -= 1) << 16;
+      const offset = offsetH | offsetL;
+      if (chunkData && offset < chunkData.length) {
+        chunkData[offset] = color;
+      }
+      if (canvas) {
+        const canvasSize = canvas.size;
+        const halfSize = canvasSize / 2;
+        const localX = offset % CHUNK_SIZE;
+        const localY = Math.floor(offset / CHUNK_SIZE);
+        const worldX = ci * CHUNK_SIZE + localX - halfSize;
+        const worldY = cj * CHUNK_SIZE + localY - halfSize;
+        const overlayKey = getOverlayKey(cId, worldX, worldY);
+        if (localPixelOverlay.has(overlayKey)) {
+          localPixelOverlay.set(overlayKey, color);
+        }
       }
     }
   }
   
-  if (opcode === 0xC3 && pendingPixelResolvers.size > 0) {
-    const retCode = data.getInt8(1);
-    const rawWait = data.getUint32(2, false);
-    const rawCooldown = data.getInt16(6, false);
+  if (opcode === 0xC3 && data.byteLength >= 10 && pendingPixelResolvers.size > 0) {
+    const retCode = data.getUint8(1);
+    const rawWait = data.getUint32(2);
+    const coolDownSeconds = data.getInt16(6);
+    const pxlCnt = data.getUint8(8);
     
     const resolver = pendingPixelResolvers.values().next().value;
     if (resolver) {
@@ -677,30 +694,34 @@ function handleWebSocketMessage(event: MessageEvent): void {
       if (key) pendingPixelResolvers.delete(key);
       
       const waitMs = rawWait;
-      const cooldownMs = rawCooldown;
-      const pixelsAvailable = waitMs <= 0 ? 1 : 0;
-      const maxPixels = 0;
+      const cooldownMs = coolDownSeconds * 1000;
 
-      Logger.debug(`WS: retCode=${retCode} waitMs=${waitMs} cooldownMs=${cooldownMs}`);
+      Logger.debug(`WS: retCode=${retCode} waitMs=${waitMs} cooldownMs=${cooldownMs} pxlCnt=${pxlCnt}`);
       
-      const base = { waitMs, cooldownMs, pixelsAvailable, maxPixels };
+      const base = { waitMs, cooldownMs, pixelsAvailable: pxlCnt, maxPixels: 0 };
 
       if (retCode === 0) {
         resolver({ success: true, ...base });
-      } else if (retCode === 5) {
-        resolver({ success: false, ...base, error: 'Pixel already correct color' });
+      } else if (retCode === 8) {
+        resolver({ success: false, ...base, error: 'Protected pixel' });
       } else if (retCode === 9) {
         resolver({ success: false, ...base, error: 'Cooldown not expired' });
       } else if (retCode === 10) {
         resolver({ success: false, ...base, error: 'Captcha required', captcha: true });
       } else if (retCode === 1) {
         resolver({ success: false, ...base, error: 'Invalid canvas' });
-      } else if (retCode === 2) {
+      } else if (retCode === 2 || retCode === 3 || retCode === 4) {
         resolver({ success: false, ...base, error: 'Invalid coordinates' });
-      } else if (retCode === 3) {
+      } else if (retCode === 5) {
         resolver({ success: false, ...base, error: 'Invalid color' });
-      } else if (retCode === 4) {
-        resolver({ success: false, ...base, error: 'Protected pixel' });
+      } else if (retCode === 6) {
+        resolver({ success: false, ...base, error: 'Not logged in' });
+      } else if (retCode === 7) {
+        resolver({ success: false, ...base, error: 'Pixel score too low' });
+      } else if (retCode === 11) {
+        resolver({ success: false, ...base, error: 'Proxy detected' });
+      } else if (retCode === 14) {
+        resolver({ success: false, ...base, error: 'Banned' });
       } else {
         resolver({ success: false, ...base, error: `Unknown error code: ${retCode}` });
       }
@@ -718,53 +739,69 @@ export function initWebSocketHook(): void {
   }, 1500 + Math.random() * 500);
 }
 
-export async function placePixelViaWebSocket(
+export function placePixelViaWebSocket(
   x: number,
   y: number,
   colorIndex: number,
   canvasId: number
 ): Promise<PixelPlaceResult> {
-  const canvas = getMainCanvas();
-  if (!canvas) {
-    return { success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: 'No canvas info' };
-  }
+  return new Promise((resolve) => {
+    const canvas = getMainCanvas();
+    if (!canvas) {
+      resolve({ success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: 'No canvas info' });
+      return;
+    }
 
-  Logger.debug(`Place: world(${x},${y}) canvas=${canvasId} color=${colorIndex}`);
+    const ws = findSiteWebSocket();
 
-  try {
-    const response = await nativeFetch(`${BASE_URL}/api/pixel`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cn: canvasId,
-        x,
-        y,
-        clr: colorIndex,
-      }),
-      credentials: 'include',
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      resolve({ success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: 'WebSocket not connected. Please refresh the page.' });
+      return;
+    }
+
+    const canvasSize = canvas.size;
+    const halfSize = canvasSize / 2;
+    const absX = x + halfSize;
+    const absY = y + halfSize;
+    const i = Math.floor(absX / CHUNK_SIZE);
+    const j = Math.floor(absY / CHUNK_SIZE);
+    const localX = absX % CHUNK_SIZE;
+    const localY = absY % CHUNK_SIZE;
+    const offset = localX + localY * CHUNK_SIZE;
+
+    Logger.debug(`Place: world(${x},${y}) canvas=${canvasId} chunk(${i},${j}) offset=${offset} color=${colorIndex}`);
+
+    const buffer = new ArrayBuffer(1 + 1 + 1 + 4);
+    const view = new DataView(buffer);
+    view.setUint8(0, 0x91);
+    view.setUint8(1, i);
+    view.setUint8(2, j);
+    view.setUint8(3, offset >>> 16);
+    view.setUint16(4, offset & 0x00FFFF);
+    view.setUint8(6, colorIndex);
+
+    const requestId = `${Date.now()}_${Math.random()}`;
+    
+    const timeout = setTimeout(() => {
+      if (pendingPixelResolvers.has(requestId)) {
+        pendingPixelResolvers.delete(requestId);
+        resolve({ success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: 'Timeout waiting for response' });
+      }
+    }, 20000);
+
+    pendingPixelResolvers.set(requestId, (result) => {
+      clearTimeout(timeout);
+      resolve(result);
     });
 
-    if (response.status === 422) {
-      return { success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: 'Captcha required', captcha: true };
+    try {
+      ws.send(buffer);
+    } catch (err) {
+      pendingPixelResolvers.delete(requestId);
+      clearTimeout(timeout);
+      resolve({ success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: `Send error: ${err}` });
     }
-
-    const data = await response.json();
-    const waitMs = data.waitSeconds ? data.waitSeconds * 1000 : 0;
-    const cooldownMs = data.coolDownSeconds ? data.coolDownSeconds * 1000 : 0;
-
-    if (!response.ok) {
-      const errorMsg = data.errors?.[0]?.msg || data.errorTitle || `HTTP ${response.status}`;
-      return { success: false, waitMs, cooldownMs, pixelsAvailable: 0, maxPixels: 0, error: errorMsg };
-    }
-
-    if (data.success) {
-      return { success: true, waitMs, cooldownMs, pixelsAvailable: 0, maxPixels: 0 };
-    }
-
-    return { success: false, waitMs, cooldownMs, pixelsAvailable: 0, maxPixels: 0, error: 'Cooldown not expired' };
-  } catch (err) {
-    return { success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: `Request error: ${err}` };
-  }
+  });
 }
 
 export function connectToWebSocket(): Promise<WebSocket> {
