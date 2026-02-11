@@ -129,21 +129,27 @@ let pixelWebSocket: WebSocket | null = null;
 let pendingPixelResolvers: Map<string, (result: PixelPlaceResult) => void> = new Map();
 
 export async function fetchMe(): Promise<MeResponse> {
-  const response = await nativeFetch(`${BASE_URL}/api/me`, {
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch /api/me: ${response.status}`);
+  const [meResponse, canvasesResponse] = await Promise.all([
+    nativeFetch(`${BASE_URL}/api/me`, { credentials: 'include' }),
+    nativeFetch(`${BASE_URL}/api/canvases`, { credentials: 'include' }),
+  ]);
+  if (!meResponse.ok) {
+    throw new Error(`Failed to fetch /api/me: ${meResponse.status}`);
   }
-  const data = await response.json();
-  cachedMe = data;
-  if (data.canvases) {
-    for (const [id, canvas] of Object.entries(data.canvases)) {
+  if (!canvasesResponse.ok) {
+    throw new Error(`Failed to fetch /api/canvases: ${canvasesResponse.status}`);
+  }
+  const meData = await meResponse.json();
+  const canvasesData = await canvasesResponse.json();
+  meData.canvases = canvasesData.canvases || {};
+  cachedMe = meData;
+  if (meData.canvases) {
+    for (const [id, canvas] of Object.entries(meData.canvases)) {
       const c = canvas as CanvasInfo;
       Logger.info(`Canvas ${id}: "${c.title}" size=${c.size} cli=${c.cli} bcd=${c.bcd} cds=${c.cds}`);
     }
   }
-  return data;
+  return meData;
 }
 
 export function getCachedMe(): MeResponse | null {
