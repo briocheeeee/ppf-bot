@@ -273,7 +273,7 @@ export class Panel {
               </select>
             </div>
             <div class="ppf-row">
-              <label class="ppf-label">Brush</label>
+              <label class="ppf-label">Brush (beta)</label>
               <select class="ppf-select" id="ppf-brush-size">
                 <option value="1x1">1x1</option>
                 <option value="3x3">3x3</option>

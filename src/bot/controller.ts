@@ -144,10 +144,8 @@ export class BotController {
 
     setCanvasId(parseInt(this.config.canvasId, 10) || 0);
 
-    if (!this.canvas) {
-      const initialized = await this.initialize();
-      if (!initialized) return;
-    }
+    const initialized = await this.initialize();
+    if (!initialized) return;
 
     clearChunkCache();
     clearLocalPixelOverlay();
@@ -329,6 +327,16 @@ export class BotController {
             await new Promise(r => setTimeout(r, delay));
           }
 
+          if (!this.config.skipColorCheck) {
+            const recheck = this.config.repairMode
+              ? await getFreshPixelColor(canvasId, bx, by, this.canvas.size)
+              : getPixelColorSync(canvasId, bx, by, this.canvas.size);
+            if (recheck !== null && recheck === pixel.color) {
+              placed = true;
+              break;
+            }
+          }
+
           const result = await placePixelViaWebSocket(bx, by, pixel.color, canvasId);
 
           if (result.success) {
@@ -355,6 +363,9 @@ export class BotController {
               this.moveCamera(bx, by);
             }
 
+          } else if (result.error?.includes('already correct color')) {
+            placed = true;
+            setLocalPixel(canvasId, bx, by, pixel.color);
           } else if (result.captcha || result.error?.includes('Captcha')) {
             if (this.config.stopOnCaptcha) {
               Logger.warn('[LOOP] Captcha required - pausing until solved');
@@ -373,8 +384,6 @@ export class BotController {
             Logger.info(`[LOOP] Cooldown ${Math.round(waitTime/1000)}s - will retry pixel`);
             await this.waitCooldown(waitTime);
             Logger.info(`[LOOP] Cooldown done, running=${this.running}`);
-          } else if (result.error?.includes('already correct color')) {
-            placed = true;
           } else if (result.error?.includes('Protected pixel')) {
             Logger.info(`[LOOP] Protected pixel at ${bx},${by}, skipping`);
             placed = true;

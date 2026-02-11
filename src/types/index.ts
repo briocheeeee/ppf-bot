@@ -1,5 +1,6 @@
 export interface CanvasInfo {
   id: number;
+  ident: string;
   title: string;
   colors: number[][];
   size: number;

@@ -26,7 +26,70 @@ function isPixelyaSite(): boolean {
   return BASE_URL.includes('pixelya.fun');
 }
 
-export { isPixelyaSite };
+function isPixmapSite(): boolean {
+  return BASE_URL.includes('pixmap.fun');
+}
+
+export { isPixelyaSite, isPixmapSite };
+
+const PIXMAP_PALETTE: number[][] = [
+  [202, 227, 255],
+  [255, 255, 255],
+  [255, 255, 255],
+  [228, 228, 228],
+  [196, 196, 196],
+  [136, 136, 136],
+  [78, 78, 78],
+  [0, 0, 0],
+  [244, 179, 174],
+  [255, 167, 209],
+  [255, 84, 178],
+  [255, 101, 101],
+  [229, 0, 0],
+  [154, 0, 0],
+  [254, 164, 96],
+  [229, 149, 0],
+  [160, 106, 66],
+  [96, 64, 40],
+  [245, 223, 176],
+  [255, 248, 137],
+  [229, 217, 0],
+  [148, 224, 68],
+  [2, 190, 1],
+  [104, 131, 56],
+  [0, 101, 19],
+  [202, 227, 255],
+  [0, 211, 221],
+  [0, 131, 199],
+  [0, 0, 234],
+  [25, 25, 115],
+  [207, 110, 228],
+  [130, 0, 128],
+  [83, 39, 68],
+  [125, 46, 78],
+  [193, 55, 71],
+  [214, 113, 55],
+  [252, 154, 41],
+  [68, 33, 57],
+  [131, 51, 33],
+  [163, 61, 24],
+  [223, 96, 22],
+  [31, 37, 127],
+  [10, 79, 175],
+  [10, 126, 230],
+  [88, 237, 240],
+  [37, 20, 51],
+  [53, 33, 67],
+  [66, 21, 100],
+  [74, 27, 144],
+  [110, 75, 237],
+  [16, 58, 47],
+  [16, 74, 31],
+  [16, 142, 47],
+  [16, 180, 47],
+  [117, 215, 87],
+];
+
 
 let cachedMe: MeResponse | null = null;
 let cachedCanvas: CanvasInfo | null = null;
@@ -41,6 +104,7 @@ function getOverlayKey(canvasId: number, x: number, y: number): string {
 
 export function setLocalPixel(canvasId: number, x: number, y: number, color: number): void {
   localPixelOverlay.set(getOverlayKey(canvasId, x, y), color);
+  updateChunkPixel(canvasId, x, y, color);
 }
 
 export function getLocalPixel(canvasId: number, x: number, y: number): number | null {
@@ -112,21 +176,20 @@ export function getCanvasId(): number {
 export function detectCanvasIdFromHash(): number | null {
   const hash = window.location.hash.replace('#', '');
   if (!hash) return null;
-  const letter = hash.split(',')[0];
-  if (!letter || letter.length !== 1 || !/^[a-zA-Z]$/.test(letter)) return null;
+  const hashIdent = hash.split(',')[0];
+  if (!hashIdent || !/^[a-zA-Z]+$/.test(hashIdent)) return null;
   if (!cachedMe || !cachedMe.canvases) return null;
-  const letterLower = letter.toLowerCase();
-  Logger.info(`Detecting canvas from hash letter: "${letterLower}"`);
+  const identLower = hashIdent.toLowerCase();
+  Logger.info(`Detecting canvas from hash ident: "${identLower}"`);
   for (const [id, canvas] of Object.entries(cachedMe.canvases)) {
-    const idx = canvas.cli;
-    const canvasLetter = String.fromCharCode(97 + idx);
-    Logger.info(`  Canvas ${id}: cli=${idx} -> letter="${canvasLetter}"`);
-    if (canvasLetter === letterLower) {
-      Logger.info(`  MATCH: hash letter "${letterLower}" -> canvas ID ${id}`);
+    const canvasIdent = (canvas.ident || '').toLowerCase();
+    Logger.info(`  Canvas ${id}: ident="${canvasIdent}" title="${canvas.title}"`);
+    if (canvasIdent === identLower) {
+      Logger.info(`  MATCH: hash ident "${identLower}" -> canvas ID ${id}`);
       return parseInt(id, 10);
     }
   }
-  Logger.warn(`No canvas found for hash letter "${letterLower}"`);
+  Logger.warn(`No canvas found for hash ident "${identLower}"`);
   return null;
 }
 
@@ -138,6 +201,7 @@ export function setCanvasId(id: number): void {
 }
 
 export function getCanvasColors(): number[][] {
+  if (isPixmapSite()) return PIXMAP_PALETTE;
   const canvas = getMainCanvas();
   if (!canvas) return [];
   return canvas.colors;
@@ -283,6 +347,21 @@ export async function batchCheckPixelColors(
   return results;
 }
 
+export function updateChunkPixel(canvasId: number, x: number, y: number, color: number): void {
+  const canvas = getMainCanvas();
+  if (!canvas) return;
+  const canvasSize = canvas.size;
+  const { cx, cy } = pixelToChunk(x, y, canvasSize);
+  const key = `${canvasId}_${cx}_${cy}`;
+  const chunkData = chunkCache.get(key);
+  if (!chunkData) return;
+  const offset = canvasSize / 2;
+  const localX = ((x + offset) % CHUNK_SIZE + CHUNK_SIZE) % CHUNK_SIZE;
+  const localY = ((y + offset) % CHUNK_SIZE + CHUNK_SIZE) % CHUNK_SIZE;
+  const index = localY * CHUNK_SIZE + localX;
+  chunkData[index] = color;
+}
+
 export function invalidateChunkCache(cx: number, cy: number, canvasId: number): void {
   const key = `${canvasId}_${cx}_${cy}`;
   chunkCache.delete(key);
@@ -294,9 +373,10 @@ export function clearChunkCache(): void {
 
 export function findClosestColorIndex(r: number, g: number, b: number, colors: number[][]): number {
   let minDist = Infinity;
-  let closestIndex = 0;
+  let closestIndex = 1;
+  const startIndex = colors.length > 1 ? 1 : 0;
 
-  for (let i = 0; i < colors.length; i++) {
+  for (let i = startIndex; i < colors.length; i++) {
     const [cr, cg, cb] = colors[i];
     const dr = r - cr;
     const dg = g - cg;
@@ -551,6 +631,34 @@ function handleWebSocketMessage(event: MessageEvent): void {
   
   const data = new DataView(event.data);
   const opcode = data.getUint8(0);
+
+  if (opcode === 0xC1 && data.byteLength >= 7) {
+    const cy = data.getUint8(1);
+    const cx = data.getUint8(2);
+    const offsetHigh = data.getUint8(3);
+    const offsetLow = data.getUint16(4, false);
+    const offset = (offsetHigh << 16) | offsetLow;
+    const color = data.getUint8(6);
+    const cId = cachedCanvasId;
+    const key = `${cId}_${cx}_${cy}`;
+    const chunkData = chunkCache.get(key);
+    if (chunkData && offset < chunkData.length) {
+      chunkData[offset] = color;
+    }
+    const canvas = getMainCanvas();
+    if (canvas) {
+      const canvasSize = canvas.size;
+      const halfSize = canvasSize / 2;
+      const localX = offset % CHUNK_SIZE;
+      const localY = Math.floor(offset / CHUNK_SIZE);
+      const worldX = cx * CHUNK_SIZE + localX - halfSize;
+      const worldY = cy * CHUNK_SIZE + localY - halfSize;
+      const overlayKey = getOverlayKey(cId, worldX, worldY);
+      if (localPixelOverlay.has(overlayKey)) {
+        localPixelOverlay.set(overlayKey, color);
+      }
+    }
+  }
   
   if (opcode === 0xC3 && pendingPixelResolvers.size > 0) {
     const retCode = data.getInt8(1);
@@ -656,9 +764,6 @@ export function placePixelViaWebSocket(
 
     pendingPixelResolvers.set(requestId, (result) => {
       clearTimeout(timeout);
-      if (result.success) {
-        invalidateChunkCache(cx, cy, canvasId);
-      }
       resolve(result);
     });
 
