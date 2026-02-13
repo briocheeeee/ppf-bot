@@ -1,9 +1,7 @@
 import type { BotConfig, BotState, CanvasInfo } from '../types';
-
-declare const unsafeWindow: Window & typeof globalThis;
-import { 
-  fetchMe, 
-  getMainCanvas, 
+import {
+  fetchMe,
+  getMainCanvas,
   getCanvasId,
   setCanvasId,
   getPixelColorSync,
@@ -20,6 +18,9 @@ import { processImage, ProcessedImage } from './imageProcessor';
 import { Logger } from '../utils/logger';
 import { isCaptchaActive } from '../utils/captchaSolver';
 import { gaussianRandom, shouldTakeBreak, getBreakDuration } from '../utils/antidetect';
+import { STORAGE_KEY } from '../utils/storage';
+
+declare const unsafeWindow: Window & typeof globalThis;
 
 type StateChangeCallback = (state: BotState) => void;
 
@@ -102,20 +103,29 @@ export class BotController {
   }
 
   async initialize(): Promise<boolean> {
-    try {
-      Logger.info('Initializing bot...');
-      await fetchMe();
-      this.canvas = getMainCanvas();
-      if (!this.canvas) {
-        Logger.error('Failed to get canvas info');
-        return false;
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        Logger.info(`Initializing bot... (attempt ${attempt}/${maxAttempts})`);
+        await fetchMe();
+        this.canvas = getMainCanvas();
+        if (!this.canvas) {
+          Logger.error('Failed to get canvas info');
+          return false;
+        }
+        Logger.info(`Canvas loaded: ${this.canvas.title}, size: ${this.canvas.size}`);
+        return true;
+      } catch (err) {
+        Logger.error(`Failed to initialize (attempt ${attempt}/${maxAttempts}):`, err);
+        if (attempt < maxAttempts) {
+          const delayMs = 3000 * attempt + Math.random() * 2000;
+          Logger.info(`Retrying initialization in ${Math.round(delayMs)}ms...`);
+          await new Promise(r => setTimeout(r, delayMs));
+        }
       }
-      Logger.info(`Canvas loaded: ${this.canvas.title}, size: ${this.canvas.size}`);
-      return true;
-    } catch (err) {
-      Logger.error('Failed to initialize:', err);
-      return false;
     }
+    Logger.error('Bot initialization failed after all attempts');
+    return false;
   }
 
   parseCoordinates(): { x: number; y: number } | null {
@@ -164,8 +174,8 @@ export class BotController {
     }
 
     let startIndex = 0;
-    if (savedProgress && 
-        savedProgress.imageName === this.config.imageName && 
+    if (savedProgress &&
+        savedProgress.imageName === this.config.imageName &&
         savedProgress.coordinates === this.config.coordinates &&
         savedProgress.currentPixelIndex < this.processedImage.pixels.length) {
       startIndex = savedProgress.currentPixelIndex;
@@ -193,12 +203,12 @@ export class BotController {
 
   stop(): void {
     this.running = false;
-    
+
     this.cooldownIntervals.forEach(id => clearInterval(id));
     this.cooldownIntervals.clear();
     this.cooldownTimeouts.forEach(id => clearTimeout(id));
     this.cooldownTimeouts.clear();
-    
+
     this.updateState({ status: 'stopped', cooldown: 0 });
     this.saveProgress();
     Logger.info('Bot stopped');
@@ -206,7 +216,7 @@ export class BotController {
 
   private saveProgress(): void {
     if (!this.processedImage || !this.config.imageName) return;
-    
+
     const progress = {
       currentPixelIndex: this.state.currentPixelIndex,
       imageName: this.config.imageName,
@@ -214,15 +224,13 @@ export class BotController {
     };
 
     try {
-      const stored = localStorage.getItem('windowsxp-bot-state');
+      const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const state = JSON.parse(stored);
         state.progress = progress;
-        localStorage.setItem('windowsxp-bot-state', JSON.stringify(state));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   private async waitForWebSocket(maxWaitMs: number = 10000): Promise<boolean> {
@@ -237,7 +245,7 @@ export class BotController {
 
   private async runLoop(): Promise<void> {
     Logger.info(`[LOOP] Starting runLoop - running=${this.running}`);
-    
+
     if (!this.running || !this.processedImage || !this.canvas) {
       Logger.warn(`[LOOP] Early exit - running=${this.running}, hasImage=${!!this.processedImage}, hasCanvas=${!!this.canvas}`);
       return;
@@ -431,7 +439,7 @@ export class BotController {
       if (brushPlacedAny) {
         await this.maybeHumanBreak(this.state.placedPixels);
       }
-      
+
       if (!this.running) {
         Logger.warn(`[LOOP] Loop exiting - running became false at index ${currentIndex}`);
         break;
@@ -468,7 +476,7 @@ export class BotController {
 
     return new Promise((resolve) => {
       const endTime = Date.now() + ms;
-      
+
       const intervalId = window.setInterval(() => {
         if (!this.running) {
           clearInterval(intervalId);
@@ -480,7 +488,7 @@ export class BotController {
         const remaining = Math.max(0, endTime - Date.now());
         this.updateState({ cooldown: remaining / 1000 });
       }, 500);
-      
+
       this.cooldownIntervals.add(intervalId);
 
       const timeoutId = window.setTimeout(() => {
@@ -490,7 +498,7 @@ export class BotController {
         this.updateState({ cooldown: 0 });
         resolve();
       }, ms);
-      
+
       this.cooldownTimeouts.add(timeoutId);
     });
   }
@@ -522,9 +530,7 @@ export class BotController {
           return;
         }
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   getEstimatedTimeRemaining(): string {

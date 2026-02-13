@@ -5,7 +5,7 @@ import { botController } from '../bot/controller';
 import { loadImageFromFile, loadImageFromUrl } from '../bot/imageProcessor';
 import { loadState, saveState, restoreImageData, imageDataToDataUrl } from '../utils/storage';
 import { Logger } from '../utils/logger';
-import { getCachedMe, clearChunkCache, detectCanvasIdFromHash } from '../api/pixmap';
+import { getCachedMe, clearChunkCache, detectCanvasIdFromHash, getPlacedPixelHistory, getMainCanvas } from '../api/pixmap';
 import { setupHotkeys } from '../utils/hotkeys';
 
 export class Panel {
@@ -109,17 +109,17 @@ export class Panel {
     this.updateMiscUIFromSettings();
     this.restorePanelSize();
     this.restoreCollapsedSections();
-    
+
     setupHotkeys(
       () => this.onStart(),
       () => this.onStop(),
       () => this.onResetProgress(),
       () => this.toggleMinimize()
     );
-    
+
     botController.setStateChangeCallback((state) => this.onStateChange(state));
     botController.updateConfig(this.config);
-    
+
     botController.initialize().then(async (success) => {
       if (success) {
         Logger.info('Bot initialized successfully');
@@ -176,9 +176,7 @@ export class Panel {
           Logger.info(`Auto-filled coordinates from URL: ${this.config.coordinates} (canvas ${this.config.canvasId})`);
         }
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   private tryAutoResume(): void {
@@ -240,7 +238,7 @@ export class Panel {
       </div>
       <div class="ppf-content">
         <div class="ppf-tab-content ppf-tab-content-active" id="ppf-tab-main">
-        
+
         <div class="ppf-section">
           <div class="ppf-section-header" data-section="image">
             <span class="ppf-section-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span> IMAGE <span class="ppf-section-arrow"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></span>
@@ -256,7 +254,7 @@ export class Panel {
             <div id="ppf-preview" class="ppf-preview"></div>
           </div>
         </div>
-        
+
         <div class="ppf-section">
           <div class="ppf-section-header" data-section="placement">
             <span class="ppf-section-icon"><svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span> PLACEMENT <span class="ppf-section-arrow"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></span>
@@ -283,7 +281,7 @@ export class Panel {
             <div class="ppf-row">
               <label class="ppf-label">Strategy</label>
               <select class="ppf-select" id="ppf-strategy">
-                ${Object.entries(STRATEGY_LABELS).map(([value, label]) => 
+                ${Object.entries(STRATEGY_LABELS).map(([value, label]) =>
                   `<option value="${value}">${label}</option>`
                 ).join('')}
               </select>
@@ -294,7 +292,7 @@ export class Panel {
             </div>
           </div>
         </div>
-        
+
         <div class="ppf-section">
           <div class="ppf-section-header" data-section="options">
             <span class="ppf-section-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span> OPTIONS <span class="ppf-section-arrow"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></span>
@@ -332,15 +330,15 @@ export class Panel {
             </div>
           </div>
         </div>
-        
+
         <div class="ppf-buttons">
           <button class="ppf-btn ppf-btn-start" id="ppf-start-btn">Start</button>
           <button class="ppf-btn ppf-btn-stop" id="ppf-stop-btn" disabled>Stop</button>
           <button class="ppf-btn ppf-btn-icon" id="ppf-reset-btn" title="Reset progress"><svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></button>
         </div>
-        
+
         </div>
-        
+
         <div class="ppf-tab-content" id="ppf-tab-misc">
           <div class="ppf-section">
             <div class="ppf-section-header" data-section="appearance">
@@ -361,7 +359,7 @@ export class Panel {
               </div>
             </div>
           </div>
-          
+
           <div class="ppf-section">
             <div class="ppf-section-header" data-section="notifications">
               <span class="ppf-section-icon"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span> NOTIFICATIONS <span class="ppf-section-arrow"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></span>
@@ -385,7 +383,7 @@ export class Panel {
               </div>
             </div>
           </div>
-          
+
           <div class="ppf-section">
             <div class="ppf-section-header" data-section="hotkeys">
               <span class="ppf-section-icon"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"/><path d="M6 8h.001"/><path d="M10 8h.001"/><path d="M14 8h.001"/><path d="M18 8h.001"/><path d="M8 12h.001"/><path d="M12 12h.001"/><path d="M16 12h.001"/><path d="M7 16h10"/></svg></span> HOTKEYS <span class="ppf-section-arrow"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></span>
@@ -397,7 +395,7 @@ export class Panel {
               <div class="ppf-info-row"><span class="ppf-info-label"><span class="ppf-kbd">M</span></span><span class="ppf-info-value">Minimize / Expand</span></div>
             </div>
           </div>
-          
+
           <div class="ppf-section">
             <div class="ppf-section-header" data-section="actions">
               <span class="ppf-section-icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span> ACTIONS <span class="ppf-section-arrow"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></span>
@@ -414,7 +412,7 @@ export class Panel {
               <input type="file" id="ppf-import-file" accept=".json" style="display: none;">
             </div>
           </div>
-          
+
           <div class="ppf-section">
             <div class="ppf-section-header" data-section="stats">
               <span class="ppf-section-icon"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> SESSION STATS <span class="ppf-section-arrow"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></span>
@@ -425,7 +423,7 @@ export class Panel {
               <div class="ppf-info-row"><span class="ppf-info-label">Pixels/hour</span><span class="ppf-info-value" id="ppf-pixels-hour">0</span></div>
             </div>
           </div>
-          
+
           <div class="ppf-section">
             <div class="ppf-section-header" data-section="about">
               <span class="ppf-section-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span> ABOUT <span class="ppf-section-arrow"><svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></span>
@@ -437,7 +435,7 @@ export class Panel {
             </div>
           </div>
         </div>
-        
+
         <div class="ppf-status-section">
           <div class="ppf-status-header"><span class="ppf-section-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span> LIVE STATUS</div>
           <div class="ppf-status-row">
@@ -476,18 +474,23 @@ export class Panel {
             <div class="ppf-progress-fill" id="ppf-progress-bar" style="width:0%"></div>
           </div>
         </div>
+
+        <div class="ppf-status-section">
+          <div class="ppf-status-header"><span class="ppf-section-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span> LAST PIXELS</div>
+          <div id="ppf-last-pixels" style="max-height:140px;overflow-y:auto;font-size:11px;line-height:1.6;padding:2px 0;"></div>
+        </div>
       </div>
     `;
 
     this.root.appendChild(this.container);
-    
+
     if (this.position.x !== 0 || this.position.y !== 0) {
       this.container.style.left = `${this.position.x}px`;
       this.container.style.top = `${this.position.y}px`;
       this.container.style.bottom = 'auto';
       this.container.style.transform = 'none';
     }
-    
+
     this.cacheElements();
   }
 
@@ -523,21 +526,21 @@ export class Panel {
 
   private populateCanvasSelect(): void {
     if (!this.elements.canvasSelect) return;
-    
+
     const me = getCachedMe();
     if (!me || !me.canvases) {
       this.elements.canvasSelect.innerHTML = '<option value="0">Earth</option>';
       return;
     }
-    
+
     this.elements.canvasSelect.innerHTML = '';
-    Object.entries(me.canvases).forEach(([id, canvas]: [string, any]) => {
+    Object.entries(me.canvases).forEach(([id, canvas]) => {
       const option = document.createElement('option');
       option.value = id;
       option.textContent = canvas.title || `Canvas ${id}`;
       this.elements.canvasSelect!.appendChild(option);
     });
-    
+
     if (this.config.canvasId) {
       this.elements.canvasSelect.value = this.config.canvasId;
     }
@@ -571,7 +574,7 @@ export class Panel {
       if (this.isDragging) this.onDragMove(e);
       if (this.isResizing) this.onResizeMove(e);
     });
-    
+
     document.addEventListener('touchmove', (e) => {
       if (this.isDragging || this.isResizing) {
         e.preventDefault();
@@ -580,31 +583,31 @@ export class Panel {
         if (this.isResizing) this.onResizeMove({ clientX: touch.clientX, clientY: touch.clientY } as MouseEvent);
       }
     }, { passive: false });
-    
+
     document.addEventListener('mouseup', () => {
       this.onDragEnd();
       this.onResizeEnd();
     });
-    
+
     document.addEventListener('touchend', () => {
       this.onDragEnd();
       this.onResizeEnd();
     });
-    
+
     document.addEventListener('touchcancel', () => {
       this.onDragEnd();
       this.onResizeEnd();
     });
 
     minimizeBtn.addEventListener('click', () => this.toggleMinimize());
-    
+
     this.root.querySelectorAll('.ppf-tab').forEach(tab => {
       tab.addEventListener('click', (e) => {
         const tabName = (e.target as HTMLElement).getAttribute('data-tab') as 'main' | 'misc';
         if (tabName) this.switchTab(tabName);
       });
     });
-    
+
     this.root.querySelectorAll('.ppf-section-header').forEach(header => {
       header.addEventListener('click', (e) => {
         const headerEl = (e.target as HTMLElement).closest('.ppf-section-header') as HTMLElement;
@@ -715,7 +718,7 @@ export class Panel {
 
     const resetBtn = this.root.getElementById('ppf-reset-btn') as HTMLButtonElement;
     resetBtn?.addEventListener('click', () => this.onResetProgress());
-    
+
     loadUrlBtn.addEventListener('click', async () => {
       const url = imageUrlInput.value.trim();
       if (url) {
@@ -758,10 +761,10 @@ export class Panel {
 
   private onDragMove(e: MouseEvent): void {
     if (!this.container) return;
-    
+
     const x = Math.max(0, Math.min(window.innerWidth - this.container.offsetWidth, e.clientX - this.dragOffset.x));
     const y = Math.max(0, Math.min(window.innerHeight - this.container.offsetHeight, e.clientY - this.dragOffset.y));
-    
+
     this.container.style.left = `${x}px`;
     this.container.style.top = `${y}px`;
     this.container.style.bottom = 'auto';
@@ -773,15 +776,15 @@ export class Panel {
     if (!this.container) return;
     e.preventDefault();
     e.stopPropagation();
-    
+
     const target = e.target as HTMLElement;
     if (target.classList.contains('ppf-resize-tl')) this.resizeCorner = 'tl';
     else if (target.classList.contains('ppf-resize-tr')) this.resizeCorner = 'tr';
     else if (target.classList.contains('ppf-resize-bl')) this.resizeCorner = 'bl';
     else if (target.classList.contains('ppf-resize-br')) this.resizeCorner = 'br';
-    
+
     if (!this.resizeCorner) return;
-    
+
     this.isResizing = true;
     const rect = this.container.getBoundingClientRect();
     this.resizeStart = {
@@ -796,18 +799,18 @@ export class Panel {
 
   private onResizeMove(e: MouseEvent): void {
     if (!this.container || !this.resizeCorner) return;
-    
+
     const deltaX = e.clientX - this.resizeStart.x;
     const deltaY = e.clientY - this.resizeStart.y;
-    
+
     let newWidth = this.resizeStart.width;
     let newHeight = this.resizeStart.height;
     let newX = this.resizeStart.posX;
     let newY = this.resizeStart.posY;
-    
+
     const minWidth = window.innerWidth <= 768 ? 280 : 320;
     const minHeight = 120;
-    
+
     if (this.resizeCorner === 'br') {
       newWidth = Math.max(minWidth, this.resizeStart.width + deltaX);
       newHeight = Math.max(minHeight, this.resizeStart.height + deltaY);
@@ -849,7 +852,7 @@ export class Panel {
         newY = this.resizeStart.posY + (this.resizeStart.height - minHeight);
       }
     }
-    
+
     this.container.style.width = `${newWidth}px`;
     this.container.style.height = `${newHeight}px`;
     this.container.style.left = `${newX}px`;
@@ -858,7 +861,7 @@ export class Panel {
     this.container.style.transform = 'none';
     this.container.style.minWidth = 'unset';
     this.container.style.maxWidth = 'unset';
-    
+
     this.position = { x: newX, y: newY };
   }
 
@@ -922,7 +925,7 @@ export class Panel {
     this.root.querySelectorAll('.ppf-tab').forEach(t => {
       t.classList.toggle('ppf-tab-active', t.getAttribute('data-tab') === tab);
     });
-    
+
     this.root.querySelectorAll('.ppf-tab-content').forEach(content => {
       const contentId = content.id;
       content.classList.toggle('ppf-tab-content-active', contentId === `ppf-tab-${tab}`);
@@ -985,12 +988,12 @@ export class Panel {
     const notificationsCheckbox = this.root.getElementById('ppf-notifications-enabled') as HTMLInputElement;
     const autoMinimizeCheckbox = this.root.getElementById('ppf-auto-minimize') as HTMLInputElement;
     const autoResumeCheckbox = this.root.getElementById('ppf-auto-resume') as HTMLInputElement;
-    
+
     this.miscSettings.soundEnabled = soundCheckbox?.checked ?? true;
     this.miscSettings.notificationsEnabled = notificationsCheckbox?.checked ?? true;
     this.miscSettings.autoMinimize = autoMinimizeCheckbox?.checked ?? false;
     this.miscSettings.autoResume = autoResumeCheckbox?.checked ?? false;
-    
+
     this.saveCurrentState();
   }
 
@@ -1019,7 +1022,7 @@ export class Panel {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
@@ -1074,14 +1077,14 @@ export class Panel {
     const notificationsCheckbox = this.root.getElementById('ppf-notifications-enabled') as HTMLInputElement;
     const autoMinimizeCheckbox = this.root.getElementById('ppf-auto-minimize') as HTMLInputElement;
     const autoResumeCheckbox = this.root.getElementById('ppf-auto-resume') as HTMLInputElement;
-    
+
     if (opacitySlider) opacitySlider.value = String(this.miscSettings.opacity);
     if (opacityValue) opacityValue.textContent = `${this.miscSettings.opacity}%`;
     if (soundCheckbox) soundCheckbox.checked = this.miscSettings.soundEnabled;
     if (notificationsCheckbox) notificationsCheckbox.checked = this.miscSettings.notificationsEnabled;
     if (autoMinimizeCheckbox) autoMinimizeCheckbox.checked = this.miscSettings.autoMinimize;
     if (autoResumeCheckbox) autoResumeCheckbox.checked = this.miscSettings.autoResume;
-    
+
     if (this.container) {
       this.container.style.opacity = (this.miscSettings.opacity / 100).toString();
     }
@@ -1162,7 +1165,7 @@ export class Panel {
     this.config.stopOnCaptcha = this.elements.stopOnCaptchaCheckbox?.checked ?? true;
     this.config.followBot = this.elements.followBotCheckbox?.checked ?? false;
     this.config.followBotUrl = this.elements.followBotUrlInput?.value || '';
-    
+
     botController.updateConfig(this.config);
     this.saveCurrentState();
   }
@@ -1250,7 +1253,7 @@ export class Panel {
       this.updatePreview(this.config.imageData);
       botController.updateConfig(this.config);
     }
-    
+
     const savedState = loadState();
     this.completionFired = false;
     if (this.elements.startBtn) this.elements.startBtn.disabled = true;
@@ -1298,21 +1301,21 @@ export class Panel {
   private updatePreview(imageData: ImageData): void {
     const preview = this.root.getElementById('ppf-preview');
     if (!preview) return;
-    
+
     const canvas = document.createElement('canvas');
     const scale = Math.min(1, 100 / Math.max(imageData.width, imageData.height));
     canvas.width = imageData.width * scale;
     canvas.height = imageData.height * scale;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    
+
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = imageData.width;
     tempCanvas.height = imageData.height;
     const tempCtx = tempCanvas.getContext('2d');
     if (!tempCtx) return;
     tempCtx.putImageData(imageData, 0, 0);
-    
+
     ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
     preview.innerHTML = '';
     preview.appendChild(canvas);
@@ -1323,29 +1326,29 @@ export class Panel {
     canvas.width = mask.width;
     canvas.height = mask.height;
     const ctx = canvas.getContext('2d')!;
-    
+
     ctx.fillStyle = 'rgba(0, 0, 0, 0)';
     ctx.fillRect(0, 0, mask.width, mask.height);
-    
+
     const scaleX = templateImage.width / mask.width;
     const scaleY = templateImage.height / mask.height;
-    
+
     mask.pixels.forEach(p => {
       const srcX = Math.floor(p.x * scaleX);
       const srcY = Math.floor(p.y * scaleY);
       const srcIdx = (srcY * templateImage.width + srcX) * 4;
-      
+
       const r = templateImage.data[srcIdx] || 0;
       const g = templateImage.data[srcIdx + 1] || 0;
       const b = templateImage.data[srcIdx + 2] || 0;
       const a = templateImage.data[srcIdx + 3] || 255;
-      
+
       if (a > 0) {
         ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
         ctx.fillRect(p.x, p.y, 1, 1);
       }
     });
-    
+
     return ctx.getImageData(0, 0, mask.width, mask.height);
   }
 
@@ -1392,13 +1395,13 @@ export class Panel {
         this.elements.etaValue.textContent = '--:--';
       }
     }
-    
+
     const placedEl = this.root.getElementById('ppf-placed');
     if (placedEl) placedEl.textContent = `${state.placedPixels}/${state.totalPixels}`;
-    
+
     const skippedEl = this.root.getElementById('ppf-skipped');
     if (skippedEl) skippedEl.textContent = state.skippedPixels.toString();
-    
+
     const speedEl = this.root.getElementById('ppf-speed');
     if (speedEl) speedEl.textContent = `${state.pixelsPerSecond} px/s`;
 
@@ -1422,6 +1425,25 @@ export class Panel {
 
     const errorsEl = this.root.getElementById('ppf-errors');
     if (errorsEl) errorsEl.textContent = state.errorCount.toString();
+
+    const lastPixelsEl = this.root.getElementById('ppf-last-pixels');
+    if (lastPixelsEl) {
+      const history = getPlacedPixelHistory();
+      if (history.length > 0) {
+        const baseUrl = window.location.origin;
+        const canvasInfo = getMainCanvas();
+        const ident = canvasInfo?.ident || 'd';
+        lastPixelsEl.innerHTML = history.map(entry => {
+          const icon = entry.success ? '&#x2705;' : '&#x274C;';
+          const link = `${baseUrl}/#${ident},0,${entry.x},${entry.y},30`;
+          const label = `${entry.x}_${entry.y}`;
+          const errorInfo = entry.error ? ` <span style="color:#f66;font-size:10px">${entry.error}</span>` : '';
+          return `<div style="display:flex;align-items:center;gap:4px;padding:1px 0;">${icon} <a href="${link}" target="_blank" style="color:#7ab;text-decoration:none;font-family:monospace;font-size:11px;" title="Open ${label}">${label}</a>${errorInfo}</div>`;
+        }).join('');
+      } else {
+        lastPixelsEl.innerHTML = '<span style="color:#888;font-size:11px;">No pixels placed yet</span>';
+      }
+    }
 
     if (this.miscSettings.autoMinimize && state.status === 'running' && !this.minimized) {
       this.toggleMinimize();

@@ -68,7 +68,7 @@ function getStrokesForChar(char: string): number[][] {
 function drawThickLine(x1: number, y1: number, x2: number, y2: number, thickness: number = 2): Array<{x: number, y: number}> {
   const points: Array<{x: number, y: number}> = [];
   const added = new Set<string>();
-  
+
   const addPoint = (x: number, y: number) => {
     const key = `${x},${y}`;
     if (!added.has(key)) {
@@ -76,7 +76,7 @@ function drawThickLine(x1: number, y1: number, x2: number, y2: number, thickness
       points.push({ x, y });
     }
   };
-  
+
   const dx = Math.abs(x2 - x1);
   const dy = Math.abs(y2 - y1);
   const sx = x1 < x2 ? 1 : -1;
@@ -105,27 +105,27 @@ export function generateTextMask(text: string, scale: number = 3): TextMask {
   const slantAngle = 15;
   const slantRad = (slantAngle * Math.PI) / 180;
   const slantOffset = Math.tan(slantRad);
-  
+
   const extraWidth = Math.ceil(charHeight * slantOffset) + 5;
   const width = text.length * charWidth + 10 + extraWidth;
   const height = charHeight + 10;
-  
+
   const pixels: TextPixel[] = [];
   let cursorX = 5;
   let globalOrder = 0;
-  
+
   for (let charIndex = 0; charIndex < text.length; charIndex++) {
     const char = text[charIndex];
     const strokes = getStrokesForChar(char);
-    
+
     strokes.forEach((stroke, strokeIndex) => {
       const [x1, y1, x2, y2] = stroke;
-      
+
       const baseY1 = 5 + y1 * scale;
       const baseY2 = 5 + y2 * scale;
       const slantX1 = Math.floor((charHeight - y1 * scale) * slantOffset);
       const slantX2 = Math.floor((charHeight - y2 * scale) * slantOffset);
-      
+
       const points = drawThickLine(
         cursorX + x1 * scale + slantX1,
         baseY1,
@@ -133,7 +133,7 @@ export function generateTextMask(text: string, scale: number = 3): TextMask {
         baseY2,
         2
       );
-      
+
       points.forEach(p => {
         pixels.push({
           x: p.x,
@@ -144,30 +144,9 @@ export function generateTextMask(text: string, scale: number = 3): TextMask {
         });
       });
     });
-    
+
     cursorX += charWidth;
   }
-  
-  return { width, height, pixels };
-}
 
-export function generateTextImage(text: string): ImageData {
-  const mask = generateTextMask(text);
-  
-  const canvas = document.createElement('canvas');
-  canvas.width = mask.width;
-  canvas.height = mask.height;
-  const ctx = canvas.getContext('2d')!;
-  
-  ctx.fillStyle = 'rgba(0, 0, 0, 0)';
-  ctx.fillRect(0, 0, mask.width, mask.height);
-  
-  ctx.fillStyle = 'black';
-  mask.pixels.forEach(p => {
-    if (p.x >= 0 && p.x < mask.width && p.y >= 0 && p.y < mask.height) {
-      ctx.fillRect(p.x, p.y, 1, 1);
-    }
-  });
-  
-  return ctx.getImageData(0, 0, mask.width, mask.height);
+  return { width, height, pixels };
 }

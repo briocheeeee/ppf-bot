@@ -1,8 +1,4 @@
-declare const unsafeWindow: Window & typeof globalThis;
-
-function getTargetWindow(): Window & typeof globalThis {
-  return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-}
+import { getTargetWindow } from './env';
 
 export function interceptConsoleEarly(): void {
   try {
@@ -59,47 +55,15 @@ export function interceptConsoleEarly(): void {
       });
     };
 
-    targetWindow.console.log = function(...args: any[]) {
-      const filtered = filterArgs(...args);
-      if (filtered) {
-        originalConsole.log.apply(targetWindow.console, filtered);
-      }
-    };
-
-    targetWindow.console.info = function(...args: any[]) {
-      const filtered = filterArgs(...args);
-      if (filtered) {
-        originalConsole.info.apply(targetWindow.console, filtered);
-      }
-    };
-
-    targetWindow.console.warn = function(...args: any[]) {
-      const filtered = filterArgs(...args);
-      if (filtered) {
-        originalConsole.warn.apply(targetWindow.console, filtered);
-      }
-    };
-
-    targetWindow.console.debug = function(...args: any[]) {
-      const filtered = filterArgs(...args);
-      if (filtered) {
-        originalConsole.debug.apply(targetWindow.console, filtered);
-      }
-    };
-
-    targetWindow.console.error = function(...args: any[]) {
-      const filtered = filterArgs(...args);
-      if (filtered) {
-        originalConsole.error.apply(targetWindow.console, filtered);
-      }
-    };
-
-    targetWindow.console.trace = function(...args: any[]) {
-      const filtered = filterArgs(...args);
-      if (filtered) {
-        originalConsole.trace.apply(targetWindow.console, filtered);
-      }
-    };
+    for (const method of Object.keys(originalConsole) as Array<keyof typeof originalConsole>) {
+      const original = originalConsole[method];
+      (targetWindow.console as any)[method] = function(...args: any[]) {
+        const filtered = filterArgs(...args);
+        if (filtered) {
+          original.apply(targetWindow.console, filtered);
+        }
+      };
+    }
 
     Object.defineProperty(targetWindow.console, 'log', {
       value: targetWindow.console.log,
@@ -118,7 +82,7 @@ export function preventStackTraceDetection(): void {
     const ErrorProxy = new Proxy(OriginalError, {
       construct(target, args) {
         const error = new target(...args);
-        
+
         const stackDescriptor = Object.getOwnPropertyDescriptor(error, 'stack');
         if (!stackDescriptor || stackDescriptor.configurable) {
           Object.defineProperty(error, 'stack', {
@@ -128,8 +92,8 @@ export function preventStackTraceDetection(): void {
                 .split('\n')
                 .filter((line: string) => {
                   const lower = line.toLowerCase();
-                  return !lower.includes('userscript') && 
-                         !lower.includes('tampermonkey') && 
+                  return !lower.includes('userscript') &&
+                         !lower.includes('tampermonkey') &&
                          !lower.includes('greasemonkey') &&
                          !lower.includes('extension') &&
                          !lower.includes('user.js');
@@ -139,7 +103,7 @@ export function preventStackTraceDetection(): void {
             configurable: true
           });
         }
-        
+
         return error;
       }
     });
@@ -171,11 +135,11 @@ export function blockDetectionAPIs(): void {
     const originalFetch = targetWindow.fetch;
     targetWindow.fetch = function(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
-      
+
       if (url.includes('127.0.0.1') || url.includes('localhost')) {
         return Promise.reject(new TypeError('Failed to fetch'));
       }
-      
+
       return originalFetch.call(this, input, init);
     };
 
@@ -183,11 +147,11 @@ export function blockDetectionAPIs(): void {
     const WebSocketProxy = new Proxy(CurrentWebSocket, {
       construct(target, args) {
         const urlStr = String(args[0]);
-        
+
         if (urlStr.includes('127.0.0.1') || urlStr.includes('localhost')) {
           throw new DOMException('Failed to construct WebSocket', 'SecurityError');
         }
-        
+
         return args.length > 1 ? new target(args[0], args[1]) : new target(args[0]);
       }
     });

@@ -1,6 +1,7 @@
 import type { MeResponse, CanvasInfo, ChunkCoord, PixelPlaceResult } from '../types';
 import { CHUNK_SIZE } from '../types';
 import { Logger } from '../utils/logger';
+import { getTargetWindow } from '../utils/env';
 
 declare const unsafeWindow: Window & typeof globalThis;
 
@@ -26,76 +27,15 @@ function isPixelyaSite(): boolean {
   return BASE_URL.includes('pixelya.fun');
 }
 
-function isPixmapSite(): boolean {
-  return BASE_URL.includes('pixmap.fun');
-}
-
-export { isPixelyaSite, isPixmapSite };
-
-const PIXMAP_PALETTE: number[][] = [
-  [202, 227, 255],
-  [255, 255, 255],
-  [255, 255, 255],
-  [228, 228, 228],
-  [196, 196, 196],
-  [136, 136, 136],
-  [78, 78, 78],
-  [0, 0, 0],
-  [244, 179, 174],
-  [255, 167, 209],
-  [255, 84, 178],
-  [255, 101, 101],
-  [229, 0, 0],
-  [154, 0, 0],
-  [254, 164, 96],
-  [229, 149, 0],
-  [160, 106, 66],
-  [96, 64, 40],
-  [245, 223, 176],
-  [255, 248, 137],
-  [229, 217, 0],
-  [148, 224, 68],
-  [2, 190, 1],
-  [104, 131, 56],
-  [0, 101, 19],
-  [202, 227, 255],
-  [0, 211, 221],
-  [0, 131, 199],
-  [0, 0, 234],
-  [25, 25, 115],
-  [207, 110, 228],
-  [130, 0, 128],
-  [83, 39, 68],
-  [125, 46, 78],
-  [193, 55, 71],
-  [214, 113, 55],
-  [252, 154, 41],
-  [68, 33, 57],
-  [131, 51, 33],
-  [163, 61, 24],
-  [223, 96, 22],
-  [31, 37, 127],
-  [10, 79, 175],
-  [10, 126, 230],
-  [88, 237, 240],
-  [37, 20, 51],
-  [53, 33, 67],
-  [66, 21, 100],
-  [74, 27, 144],
-  [110, 75, 237],
-  [16, 58, 47],
-  [16, 74, 31],
-  [16, 142, 47],
-  [16, 180, 47],
-  [117, 215, 87],
-];
-
+const PIXEL_UPDATE_OP = 0xC1;
+const PIXEL_RETURN_OP = 0xC3;
+const REG_CANVAS_OP = 0xA0;
 
 let cachedMe: MeResponse | null = null;
 let cachedCanvas: CanvasInfo | null = null;
 let cachedCanvasId: number = 0;
 const CHUNK_CACHE_MAX_SIZE = 512;
-let chunkCache: Map<string, Uint8Array> = new Map();
+const chunkCache: Map<string, Uint8Array> = new Map();
 const localPixelOverlay: Map<string, number> = new Map();
 
 function getOverlayKey(canvasId: number, x: number, y: number): string {
@@ -107,7 +47,7 @@ export function setLocalPixel(canvasId: number, x: number, y: number, color: num
   updateChunkPixel(canvasId, x, y, color);
 }
 
-export function getLocalPixel(canvasId: number, x: number, y: number): number | null {
+function getLocalPixel(canvasId: number, x: number, y: number): number | null {
   const val = localPixelOverlay.get(getOverlayKey(canvasId, x, y));
   return val !== undefined ? val : null;
 }
@@ -125,29 +65,85 @@ function touchChunkCache(key: string, data: Uint8Array): void {
   }
   chunkCache.set(key, data);
 }
+
 let pixelWebSocket: WebSocket | null = null;
-let pendingPixelResolvers: Map<string, (result: PixelPlaceResult) => void> = new Map();
+const pendingPixelResolvers: Map<string, (result: PixelPlaceResult) => void> = new Map();
+
+interface PlacedPixelEntry {
+  x: number;
+  y: number;
+  color: number;
+  time: number;
+  success: boolean;
+  error?: string;
+}
+
+const MAX_PLACED_HISTORY = 20;
+const placedPixelHistory: PlacedPixelEntry[] = [];
+
+export function getPlacedPixelHistory(): PlacedPixelEntry[] {
+  return [...placedPixelHistory];
+}
+
+function recordPlacedPixel(entry: PlacedPixelEntry): void {
+  placedPixelHistory.unshift(entry);
+  if (placedPixelHistory.length > MAX_PLACED_HISTORY) {
+    placedPixelHistory.length = MAX_PLACED_HISTORY;
+  }
+}
+
+async function fetchWithRetry(url: string, maxRetries: number = 5): Promise<Response> {
+  let lastResponse: Response | null = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const response = await nativeFetch(url, { credentials: 'include' });
+    lastResponse = response;
+    if (response.status === 429) {
+      const delayMs = Math.min(2000 * Math.pow(2, attempt), 30000) + Math.random() * 1000;
+      Logger.warn(`Rate limited on ${url}, retrying in ${Math.round(delayMs)}ms (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, delayMs));
+      continue;
+    }
+    return response;
+  }
+  return lastResponse!;
+}
 
 export async function fetchMe(): Promise<MeResponse> {
-  const [meResponse, canvasesResponse] = await Promise.all([
-    nativeFetch(`${BASE_URL}/api/me`, { credentials: 'include' }),
-    nativeFetch(`${BASE_URL}/api/canvases`, { credentials: 'include' }),
-  ]);
+  const meResponse = await fetchWithRetry(`${BASE_URL}/api/me`);
   if (!meResponse.ok) {
     throw new Error(`Failed to fetch /api/me: ${meResponse.status}`);
   }
-  if (!canvasesResponse.ok) {
-    throw new Error(`Failed to fetch /api/canvases: ${canvasesResponse.status}`);
-  }
   const meData = await meResponse.json();
-  const canvasesData = await canvasesResponse.json();
-  meData.canvases = canvasesData.canvases || {};
-  cachedMe = meData;
-  if (meData.canvases) {
-    for (const [id, canvas] of Object.entries(meData.canvases)) {
-      const c = canvas as CanvasInfo;
-      Logger.info(`Canvas ${id}: "${c.title}" size=${c.size} cli=${c.cli} bcd=${c.bcd} cds=${c.cds}`);
+
+  const hasCanvases = meData.canvases && typeof meData.canvases === 'object' && Object.keys(meData.canvases).length > 0;
+
+  if (hasCanvases) {
+    Logger.info(`Canvas data found in /api/me response (${Object.keys(meData.canvases).length} canvases)`);
+  } else {
+    Logger.info('No canvases in /api/me, trying /api/canvases...');
+    await new Promise(r => setTimeout(r, 1500 + Math.random() * 500));
+    try {
+      const canvasesResponse = await fetchWithRetry(`${BASE_URL}/api/canvases`);
+      if (canvasesResponse.ok) {
+        const canvasesData = await canvasesResponse.json();
+        meData.canvases = canvasesData.canvases || canvasesData || {};
+        Logger.info(`Canvas data loaded from /api/canvases (${Object.keys(meData.canvases).length} canvases)`);
+      } else {
+        Logger.warn(`/api/canvases returned ${canvasesResponse.status}, no canvas data available`);
+      }
+    } catch (err) {
+      Logger.warn(`/api/canvases fetch failed: ${err}`);
     }
+  }
+
+  if (!meData.canvases || Object.keys(meData.canvases).length === 0) {
+    throw new Error('No canvas data found in /api/me or /api/canvases');
+  }
+
+  cachedMe = meData;
+  for (const [id, canvas] of Object.entries(meData.canvases)) {
+    const c = canvas as CanvasInfo;
+    Logger.info(`Canvas ${id}: "${c.title}" size=${c.size} cli=${c.cli} bcd=${c.bcd} cds=${c.cds}`);
   }
   return meData;
 }
@@ -207,24 +203,19 @@ export function setCanvasId(id: number): void {
 }
 
 export function getCanvasColors(): number[][] {
-  if (isPixmapSite()) return PIXMAP_PALETTE;
   const canvas = getMainCanvas();
-  if (!canvas) return [];
+  if (!canvas || !canvas.colors || canvas.colors.length === 0) return [];
   return canvas.colors;
 }
 
-export function pixelToChunk(x: number, y: number, canvasSize: number): ChunkCoord {
+function pixelToChunk(x: number, y: number, canvasSize: number): ChunkCoord {
   const offset = canvasSize / 2;
   const cx = Math.floor((x + offset) / CHUNK_SIZE);
   const cy = Math.floor((y + offset) / CHUNK_SIZE);
   return { cx, cy };
 }
 
-export function getChunkKey(cx: number, cy: number): string {
-  return `${cx}_${cy}`;
-}
-
-export async function fetchChunk(canvasId: number, cx: number, cy: number): Promise<Uint8Array | null> {
+async function fetchChunk(canvasId: number, cx: number, cy: number): Promise<Uint8Array | null> {
   const key = `${canvasId}_${cx}_${cy}`;
   if (chunkCache.has(key)) {
     return chunkCache.get(key)!;
@@ -252,7 +243,7 @@ export async function fetchChunk(canvasId: number, cx: number, cy: number): Prom
   }
 }
 
-export function getPixelFromChunk(
+function getPixelFromChunk(
   chunkData: Uint8Array,
   x: number,
   y: number,
@@ -263,13 +254,6 @@ export function getPixelFromChunk(
   const localY = ((y + offset) % CHUNK_SIZE + CHUNK_SIZE) % CHUNK_SIZE;
   const index = localY * CHUNK_SIZE + localX;
   return chunkData[index] || 0;
-}
-
-export async function getPixelColor(canvasId: number, x: number, y: number, canvasSize: number): Promise<number | null> {
-  const { cx, cy } = pixelToChunk(x, y, canvasSize);
-  const chunkData = await fetchChunk(canvasId, cx, cy);
-  if (!chunkData) return null;
-  return getPixelFromChunk(chunkData, x, y, canvasSize);
 }
 
 export async function getFreshPixelColor(canvasId: number, x: number, y: number, canvasSize: number): Promise<number | null> {
@@ -288,7 +272,7 @@ export async function prefetchChunksForPixels(
   canvasSize: number
 ): Promise<void> {
   const chunksToFetch = new Set<string>();
-  
+
   for (const pixel of pixels) {
     const { cx, cy } = pixelToChunk(pixel.x, pixel.y, canvasSize);
     const key = `${canvasId}_${cx}_${cy}`;
@@ -296,23 +280,23 @@ export async function prefetchChunksForPixels(
       chunksToFetch.add(`${cx},${cy}`);
     }
   }
-  
+
   const chunkList = Array.from(chunksToFetch).map(k => {
     const [cx, cy] = k.split(',').map(Number);
     return { cx, cy };
   });
-  
+
   if (chunkList.length === 0) return;
-  
+
   Logger.info(`Prefetching ${chunkList.length} chunks...`);
   const startTime = Date.now();
-  
+
   const CONCURRENCY = 6;
   for (let i = 0; i < chunkList.length; i += CONCURRENCY) {
     const batch = chunkList.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(({ cx, cy }) => fetchChunk(canvasId, cx, cy)));
   }
-  
+
   const elapsed = Date.now() - startTime;
   Logger.info(`Prefetch complete in ${elapsed}ms`);
 }
@@ -332,28 +316,7 @@ export function getPixelColorSync(
   return getPixelFromChunk(chunkData, x, y, canvasSize);
 }
 
-export async function batchCheckPixelColors(
-  canvasId: number,
-  pixels: { x: number; y: number; color: number }[],
-  canvasSize: number
-): Promise<{ index: number; needsUpdate: boolean }[]> {
-  await prefetchChunksForPixels(canvasId, pixels, canvasSize);
-  
-  const results: { index: number; needsUpdate: boolean }[] = [];
-  
-  for (let i = 0; i < pixels.length; i++) {
-    const pixel = pixels[i];
-    const currentColor = getPixelColorSync(canvasId, pixel.x, pixel.y, canvasSize);
-    results.push({
-      index: i,
-      needsUpdate: currentColor !== pixel.color
-    });
-  }
-  
-  return results;
-}
-
-export function updateChunkPixel(canvasId: number, x: number, y: number, color: number): void {
+function updateChunkPixel(canvasId: number, x: number, y: number, color: number): void {
   const canvas = getMainCanvas();
   if (!canvas) return;
   const canvasSize = canvas.size;
@@ -368,7 +331,7 @@ export function updateChunkPixel(canvasId: number, x: number, y: number, color: 
   chunkData[index] = color;
 }
 
-export function invalidateChunkCache(cx: number, cy: number, canvasId: number): void {
+function invalidateChunkCache(cx: number, cy: number, canvasId: number): void {
   const key = `${canvasId}_${cx}_${cy}`;
   chunkCache.delete(key);
 }
@@ -441,8 +404,7 @@ function findAllWebSockets(): WebSocket[] {
   const sockets: WebSocket[] = [];
   const seen = new Set<WebSocket>();
 
-  function checkValue(val: unknown, depth: number): void {
-    if (depth > 3) return;
+  function checkValue(val: unknown): void {
     if (!val || typeof val !== 'object') return;
 
     if (val instanceof WebSocket) {
@@ -475,7 +437,7 @@ function findAllWebSockets(): WebSocket[] {
   for (const win of windows) {
     for (const key of Object.keys(win)) {
       try {
-        checkValue(win[key], 0);
+        checkValue(win[key]);
       } catch {}
     }
   }
@@ -489,7 +451,7 @@ function sendRegisterCanvas(ws: WebSocket): void {
   try {
     const buffer = new ArrayBuffer(2);
     const view = new DataView(buffer);
-    view.setInt8(0, 0xA0);
+    view.setInt8(0, REG_CANVAS_OP);
     view.setInt8(1, cachedCanvasId);
     ws.send(buffer);
     Logger.debug(`Sent RegisterCanvas for canvas ${cachedCanvasId}`);
@@ -520,7 +482,7 @@ function setupWebSocketListener(ws: WebSocket): void {
 }
 
 function hookWebSocketCreation(): void {
-  const targetWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  const targetWindow = getTargetWindow();
   const OriginalWebSocket = targetWindow.WebSocket;
 
   const originalSend = OriginalWebSocket.prototype.send;
@@ -597,10 +559,12 @@ function hookWebSocketCreation(): void {
     } as unknown as typeof WebSocket;
 
     stealthyWebSocket.prototype = OriginalWebSocket.prototype;
-    (stealthyWebSocket as any).CONNECTING = OriginalWebSocket.CONNECTING;
-    (stealthyWebSocket as any).OPEN = OriginalWebSocket.OPEN;
-    (stealthyWebSocket as any).CLOSING = OriginalWebSocket.CLOSING;
-    (stealthyWebSocket as any).CLOSED = OriginalWebSocket.CLOSED;
+    Object.assign(stealthyWebSocket, {
+      CONNECTING: OriginalWebSocket.CONNECTING,
+      OPEN: OriginalWebSocket.OPEN,
+      CLOSING: OriginalWebSocket.CLOSING,
+      CLOSED: OriginalWebSocket.CLOSED,
+    });
 
     Object.defineProperty(stealthyWebSocket, 'name', { value: 'WebSocket', writable: false, configurable: true });
     Object.defineProperty(stealthyWebSocket, 'toString', {
@@ -633,7 +597,7 @@ export function tryConnectWebSocket(): void {
 function retryFindWebSocket(): void {
   let attempts = 0;
   const maxAttempts = 30;
-  
+
   const interval = setInterval(() => {
     attempts++;
     const ws = findSiteWebSocket();
@@ -647,11 +611,11 @@ function retryFindWebSocket(): void {
 
 function handleWebSocketMessage(event: MessageEvent): void {
   if (!(event.data instanceof ArrayBuffer)) return;
-  
+
   const data = new DataView(event.data);
   const opcode = data.getUint8(0);
 
-  if (opcode === 0x91 && data.byteLength >= 7) {
+  if (opcode === PIXEL_UPDATE_OP && data.byteLength >= 7) {
     const ci = data.getUint8(1);
     const cj = data.getUint8(2);
     const cId = cachedCanvasId;
@@ -681,50 +645,71 @@ function handleWebSocketMessage(event: MessageEvent): void {
       }
     }
   }
-  
-  if (opcode === 0xC3 && data.byteLength >= 10 && pendingPixelResolvers.size > 0) {
+
+  if (opcode === PIXEL_RETURN_OP && data.byteLength >= 8 && pendingPixelResolvers.size > 0) {
     const retCode = data.getUint8(1);
     const rawWait = data.getUint32(2);
     const coolDownSeconds = data.getInt16(6);
-    const pxlCnt = data.getUint8(8);
-    
+    const pxlCnt = data.byteLength >= 10 ? data.getUint8(8) : (rawWait <= 0 ? 1 : 0);
+
     const resolver = pendingPixelResolvers.values().next().value;
     if (resolver) {
       const key = pendingPixelResolvers.keys().next().value as string;
       if (key) pendingPixelResolvers.delete(key);
-      
-      const waitMs = rawWait;
+
       const cooldownMs = coolDownSeconds * 1000;
 
-      Logger.debug(`WS: retCode=${retCode} waitMs=${waitMs} cooldownMs=${cooldownMs} pxlCnt=${pxlCnt}`);
-      
-      const base = { waitMs, cooldownMs, pixelsAvailable: pxlCnt, maxPixels: 0 };
+      Logger.debug(`WS: retCode=${retCode} waitMs=${rawWait} cooldownMs=${cooldownMs} pxlCnt=${pxlCnt}`);
 
-      if (retCode === 0) {
-        resolver({ success: true, ...base });
-      } else if (retCode === 8) {
-        resolver({ success: false, ...base, error: 'Protected pixel' });
-      } else if (retCode === 9) {
-        resolver({ success: false, ...base, error: 'Cooldown not expired' });
-      } else if (retCode === 10) {
-        resolver({ success: false, ...base, error: 'Captcha required', captcha: true });
-      } else if (retCode === 1) {
-        resolver({ success: false, ...base, error: 'Invalid canvas' });
-      } else if (retCode === 2 || retCode === 3 || retCode === 4) {
-        resolver({ success: false, ...base, error: 'Invalid coordinates' });
-      } else if (retCode === 5) {
-        resolver({ success: false, ...base, error: 'Invalid color' });
-      } else if (retCode === 6) {
-        resolver({ success: false, ...base, error: 'Not logged in' });
-      } else if (retCode === 7) {
-        resolver({ success: false, ...base, error: 'Pixel score too low' });
-      } else if (retCode === 11) {
-        resolver({ success: false, ...base, error: 'Proxy detected' });
-      } else if (retCode === 14) {
-        resolver({ success: false, ...base, error: 'Banned' });
-      } else {
-        resolver({ success: false, ...base, error: `Unknown error code: ${retCode}` });
+      const base = { waitMs: rawWait, cooldownMs, pixelsAvailable: pxlCnt, maxPixels: 0 };
+
+      let success = false;
+      let error = '';
+      let captcha = false;
+
+      switch (retCode) {
+        case 0:
+          success = true;
+          break;
+        case 1:
+          error = 'Invalid canvas';
+          break;
+        case 2:
+        case 3:
+        case 4:
+          error = 'Invalid coordinates';
+          break;
+        case 5:
+          error = 'Invalid color';
+          break;
+        case 6:
+          error = 'Not logged in';
+          break;
+        case 7:
+          error = 'Pixel score too low';
+          break;
+        case 8:
+          error = 'Protected pixel';
+          break;
+        case 9:
+          error = 'Cooldown not expired';
+          break;
+        case 10:
+          error = 'Captcha required';
+          captcha = true;
+          break;
+        case 11:
+          error = 'Proxy detected';
+          break;
+        case 14:
+          error = 'Banned';
+          break;
+        default:
+          error = `Unknown error code: ${retCode}`;
+          break;
       }
+
+      resolver({ success, ...base, ...(error && { error }), ...(captcha && { captcha }) });
     }
   }
 }
@@ -743,7 +728,7 @@ export function placePixelViaWebSocket(
   x: number,
   y: number,
   colorIndex: number,
-  canvasId: number
+  _canvasId: number
 ): Promise<PixelPlaceResult> {
   return new Promise((resolve) => {
     const canvas = getMainCanvas();
@@ -765,32 +750,35 @@ export function placePixelViaWebSocket(
     const absY = y + halfSize;
     const i = Math.floor(absX / CHUNK_SIZE);
     const j = Math.floor(absY / CHUNK_SIZE);
-    const localX = absX % CHUNK_SIZE;
-    const localY = absY % CHUNK_SIZE;
+    const localX = ((absX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localY = ((absY % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const offset = localX + localY * CHUNK_SIZE;
 
-    Logger.debug(`Place: world(${x},${y}) canvas=${canvasId} chunk(${i},${j}) offset=${offset} color=${colorIndex}`);
+    Logger.info(`Place: world(${x},${y}) abs(${absX},${absY}) chunk(${i},${j}) local(${localX},${localY}) offset=${offset} color=${colorIndex} canvasSize=${canvasSize}`);
 
     const buffer = new ArrayBuffer(1 + 1 + 1 + 4);
     const view = new DataView(buffer);
-    view.setUint8(0, 0x91);
+    view.setUint8(0, PIXEL_UPDATE_OP);
     view.setUint8(1, i);
     view.setUint8(2, j);
-    view.setUint8(3, offset >>> 16);
-    view.setUint16(4, offset & 0x00FFFF);
-    view.setUint8(6, colorIndex);
+    let pos = buffer.byteLength;
+    view.setUint8(pos -= 1, colorIndex);
+    view.setUint16(pos -= 2, offset & 0x00FFFF);
+    view.setUint8(pos -= 1, offset >>> 16);
 
     const requestId = `${Date.now()}_${Math.random()}`;
-    
+
     const timeout = setTimeout(() => {
       if (pendingPixelResolvers.has(requestId)) {
         pendingPixelResolvers.delete(requestId);
+        recordPlacedPixel({ x, y, color: colorIndex, time: Date.now(), success: false, error: 'Timeout' });
         resolve({ success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: 'Timeout waiting for response' });
       }
     }, 20000);
 
     pendingPixelResolvers.set(requestId, (result) => {
       clearTimeout(timeout);
+      recordPlacedPixel({ x, y, color: colorIndex, time: Date.now(), success: result.success, error: result.error });
       resolve(result);
     });
 
@@ -799,43 +787,12 @@ export function placePixelViaWebSocket(
     } catch (err) {
       pendingPixelResolvers.delete(requestId);
       clearTimeout(timeout);
+      recordPlacedPixel({ x, y, color: colorIndex, time: Date.now(), success: false, error: `Send: ${err}` });
       resolve({ success: false, waitMs: 0, cooldownMs: 0, pixelsAvailable: 0, maxPixels: 0, error: `Send error: ${err}` });
     }
   });
 }
 
-export function connectToWebSocket(): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const existing = findSiteWebSocket();
-    if (existing) {
-      resolve(existing);
-      return;
-    }
-    
-    let attempts = 0;
-    const maxAttempts = 20;
-    
-    const interval = setInterval(() => {
-      attempts++;
-      const ws = findSiteWebSocket();
-      if (ws) {
-        clearInterval(interval);
-        resolve(ws);
-      } else if (attempts >= maxAttempts) {
-        clearInterval(interval);
-        reject(new Error('Could not find site WebSocket'));
-      }
-    }, 500);
-  });
-}
-
 export function getExistingWebSocket(): WebSocket | null {
   return findSiteWebSocket();
-}
-
-export function getCurrentCooldown(): number {
-  if (cachedMe && cachedMe.wait !== null && cachedMe.wait !== undefined) {
-    return cachedMe.wait;
-  }
-  return 0;
 }

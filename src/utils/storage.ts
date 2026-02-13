@@ -1,16 +1,16 @@
-import type { SavedState, BotConfig, PanelPosition, PanelSize, MiscSettings, PlacementStrategy, Theme } from '../types';
+import type { SavedState, BotConfig, PanelPosition, PanelSize, MiscSettings } from '../types';
 
-const STORAGE_KEY = 'windowsxp-bot-state';
+export const STORAGE_KEY = 'windowsxp-bot-state';
 
 const DEFAULT_CONFIG: BotConfig = {
   coordinates: '0_0',
-  strategy: 'line-ltr' as PlacementStrategy,
+  strategy: 'line-ltr',
   stopOnCaptcha: true,
   followBot: false,
   followBotUrl: '',
   imageData: null,
   imageName: '',
-  theme: 'default' as Theme,
+  theme: 'default',
   canvasId: '0',
   brushSize: '1x1',
   textDrawText: '',
@@ -54,9 +54,7 @@ export function loadState(): SavedState {
         imageDataUrl: (parsed.imageDataUrl as string) || undefined,
       };
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
   return {
     config: { ...DEFAULT_CONFIG },
     panelPosition: { ...DEFAULT_POSITION },
@@ -74,9 +72,7 @@ export function restoreImageData(): Promise<ImageData | null> {
         return dataUrlToImageData(parsed.imageDataUrl);
       }
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
   return Promise.resolve(null);
 }
 
@@ -132,9 +128,7 @@ export function saveState(state: SavedState): void {
       imageDataUrl: savedImageDataUrl,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
-  } catch {
-    // ignore
-  }
+  } catch {}
 }
 
 export function getDefaultConfig(): BotConfig {

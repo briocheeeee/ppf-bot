@@ -13,7 +13,7 @@ export function setupHotkeys(
       e.preventDefault();
       const startBtn = document.getElementById('ppf-start-btn') as HTMLButtonElement;
       const stopBtn = document.getElementById('ppf-stop-btn') as HTMLButtonElement;
-      
+
       if (startBtn && !startBtn.disabled) {
         onStart();
       } else if (stopBtn && !stopBtn.disabled) {

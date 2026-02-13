@@ -22,7 +22,7 @@ function main(): void {
     initStealthMode();
   }
   initWebSocketHook();
-  
+
   const initPanel = (): void => {
     if (initialized) return;
     initialized = true;
@@ -38,7 +38,7 @@ function main(): void {
       Logger.debug('Ready');
     }, 1500 + Math.random() * 500);
   };
-  
+
   if (document.readyState === 'complete') {
     initPanel();
   } else {

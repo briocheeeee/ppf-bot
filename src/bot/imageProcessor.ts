@@ -8,7 +8,6 @@ export interface ProcessedImage {
   pixels: PixelData[];
 }
 
-
 export function processImage(
   imageData: ImageData,
   startX: number,
@@ -50,7 +49,6 @@ export function processImage(
   return { width, height, pixels: sortedPixels };
 }
 
-
 function sortPixelsByStrategy(
   pixels: PixelData[],
   strategy: PlacementStrategy,
@@ -90,6 +88,7 @@ function sortPixelsByStrategy(
       });
       break;
 
+    case 'center-out':
     case 'circle-in':
       sorted.sort((a, b) => {
         const centerX = _startX + _width / 2;
@@ -191,23 +190,13 @@ function sortPixelsByStrategy(
 
     case 'edges-first':
       sorted.sort((a, b) => {
-        const isEdgeA = a.x === _startX || a.x === _startX + _width - 1 || 
+        const isEdgeA = a.x === _startX || a.x === _startX + _width - 1 ||
                         a.y === _startY || a.y === _startY + _height - 1;
-        const isEdgeB = b.x === _startX || b.x === _startX + _width - 1 || 
+        const isEdgeB = b.x === _startX || b.x === _startX + _width - 1 ||
                         b.y === _startY || b.y === _startY + _height - 1;
         if (isEdgeA && !isEdgeB) return -1;
         if (!isEdgeA && isEdgeB) return 1;
         return a.y !== b.y ? a.y - b.y : a.x - b.x;
-      });
-      break;
-
-    case 'center-out':
-      sorted.sort((a, b) => {
-        const centerX = _startX + _width / 2;
-        const centerY = _startY + _height / 2;
-        const distA = Math.sqrt((a.x - centerX) ** 2 + (a.y - centerY) ** 2);
-        const distB = Math.sqrt((b.x - centerX) ** 2 + (b.y - centerY) ** 2);
-        return distA - distB;
       });
       break;
 
@@ -230,19 +219,19 @@ function sortPixelsByStrategy(
       const scatterCopy = [...sorted];
       const gridSize = 8;
       const cells: Map<string, PixelData[]> = new Map();
-      
+
       scatterCopy.forEach(p => {
         const cellKey = `${Math.floor(p.x / gridSize)}_${Math.floor(p.y / gridSize)}`;
         if (!cells.has(cellKey)) cells.set(cellKey, []);
         cells.get(cellKey)!.push(p);
       });
-      
+
       const cellKeys = Array.from(cells.keys());
       for (let i = cellKeys.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [cellKeys[i], cellKeys[j]] = [cellKeys[j], cellKeys[i]];
       }
-      
+
       cellKeys.forEach(key => {
         const cellPixels = cells.get(key)!;
         for (let i = cellPixels.length - 1; i > 0; i--) {
@@ -365,7 +354,7 @@ function sortPixelsByStrategy(
       const waveCopy = [...sorted];
       const amplitude = Math.min(_width, _height) / 4;
       const frequency = 0.1;
-      
+
       waveCopy.sort((a, b) => {
         const phaseA = a.x + Math.sin(a.y * frequency) * amplitude;
         const phaseB = b.x + Math.sin(b.y * frequency) * amplitude;
@@ -378,7 +367,7 @@ function sortPixelsByStrategy(
       const clusterCopy = [...sorted];
       const clusterSize = 16;
       const clusterMap: Map<string, PixelData[]> = new Map();
-      
+
       clusterCopy.forEach(p => {
         const cx = Math.floor((p.x - _startX) / clusterSize);
         const cy = Math.floor((p.y - _startY) / clusterSize);
@@ -386,13 +375,13 @@ function sortPixelsByStrategy(
         if (!clusterMap.has(key)) clusterMap.set(key, []);
         clusterMap.get(key)!.push(p);
       });
-      
+
       const clusterKeys = Array.from(clusterMap.keys());
       for (let i = clusterKeys.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [clusterKeys[i], clusterKeys[j]] = [clusterKeys[j], clusterKeys[i]];
       }
-      
+
       clusterKeys.forEach(key => {
         const pixels = clusterMap.get(key)!;
         pixels.sort((a, b) => {
@@ -410,22 +399,22 @@ function sortPixelsByStrategy(
       const organicUsed = new Set<number>();
       const organicLookup = new Map<string, number>();
       organicCopy.forEach((p, i) => organicLookup.set(`${p.x},${p.y}`, i));
-      
+
       let currentOrg = organicCopy[Math.floor(Math.random() * organicCopy.length)];
-      
+
       while (organicUsed.size < organicCopy.length) {
         const currentKey = `${currentOrg.x},${currentOrg.y}`;
         const currentIdx = organicLookup.get(currentKey);
-        
+
         if (currentIdx !== undefined && !organicUsed.has(currentIdx)) {
           organicUsed.add(currentIdx);
           organicResult.push(currentOrg);
         }
-        
+
         let bestNext: PixelData | null = null;
         let bestDist = Infinity;
         const searchRadius = 5;
-        
+
         for (let dy = -searchRadius; dy <= searchRadius; dy++) {
           for (let dx = -searchRadius; dx <= searchRadius; dx++) {
             if (dx === 0 && dy === 0) continue;
@@ -440,7 +429,7 @@ function sortPixelsByStrategy(
             }
           }
         }
-        
+
         if (bestNext) {
           currentOrg = bestNext;
         } else {
@@ -458,16 +447,16 @@ function sortPixelsByStrategy(
       const snakeResult: PixelData[] = [];
       const snakeCopy = [...sorted];
       snakeCopy.sort((a, b) => a.y - b.y || a.x - b.x);
-      
+
       const snakeRows: PixelData[][] = [];
-      
+
       snakeCopy.forEach(p => {
         if (snakeRows.length === 0 || p.y !== snakeRows[snakeRows.length - 1][0]?.y) {
           snakeRows.push([]);
         }
         snakeRows[snakeRows.length - 1].push(p);
       });
-      
+
       snakeRows.forEach((row, idx) => {
         if (idx % 2 === 1) row.reverse();
         snakeResult.push(...row);
@@ -478,7 +467,7 @@ function sortPixelsByStrategy(
       const zigzagResult: PixelData[] = [];
       const zigzagCopy = [...sorted];
       zigzagCopy.sort((a, b) => a.y - b.y || a.x - b.x);
-      
+
       const zigzagRows: PixelData[][] = [];
       zigzagCopy.forEach(p => {
         if (zigzagRows.length === 0 || p.y !== zigzagRows[zigzagRows.length - 1][0]?.y) {
@@ -486,12 +475,12 @@ function sortPixelsByStrategy(
         }
         zigzagRows[zigzagRows.length - 1].push(p);
       });
-      
+
       let zigzagDir = 1;
       zigzagRows.forEach(row => {
         if (zigzagDir === -1) row.reverse();
         zigzagDir *= -1;
-        
+
         for (let i = 0; i < row.length; i += 2) {
           zigzagResult.push(row[i]);
         }
@@ -504,11 +493,11 @@ function sortPixelsByStrategy(
     case 'text-draw':
       const visited = new Set<string>();
       const textResult: PixelData[] = [];
-      
+
       const getKey = (x: number, y: number) => `${x},${y}`;
       const pixelMap = new Map<string, PixelData>();
       sorted.forEach(p => pixelMap.set(getKey(p.x, p.y), p));
-      
+
       const getNeighbors = (x: number, y: number): PixelData[] => {
         const neighbors: PixelData[] = [];
         const dirs = [[0,-1], [1,-1], [1,0], [1,1], [0,1], [-1,1], [-1,0], [-1,-1]];
@@ -520,7 +509,7 @@ function sortPixelsByStrategy(
         }
         return neighbors;
       };
-      
+
       const floodFill = (startPixel: PixelData) => {
         const stack = [startPixel];
         while (stack.length > 0) {
@@ -529,7 +518,7 @@ function sortPixelsByStrategy(
           if (visited.has(key)) continue;
           visited.add(key);
           textResult.push(current);
-          
+
           const neighbors = getNeighbors(current.x, current.y);
           neighbors.sort((a, b) => {
             const distA = Math.abs(a.y - current.y) + Math.abs(a.x - current.x);
@@ -539,16 +528,16 @@ function sortPixelsByStrategy(
           stack.push(...neighbors);
         }
       };
-      
+
       sorted.sort((a, b) => a.x !== b.x ? a.x - b.x : a.y - b.y);
-      
+
       for (const pixel of sorted) {
         const key = getKey(pixel.x, pixel.y);
         if (!visited.has(key)) {
           floodFill(pixel);
         }
       }
-      
+
       return textResult;
   }
 

@@ -33,7 +33,7 @@ export interface ChunkCoord {
 
 export type BrushSize = '1x1' | '3x3' | '5x5';
 
-export type PlacementStrategy = 
+export type PlacementStrategy =
   | 'line-rtl'
   | 'line-ltr'
   | 'line-utb'

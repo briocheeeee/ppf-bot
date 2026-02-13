@@ -1,30 +1,21 @@
 import { Logger } from './logger';
-
-declare const unsafeWindow: Window & typeof globalThis;
-
-function getPageWindow(): Window & typeof globalThis {
-  try {
-    if (typeof unsafeWindow !== 'undefined') return unsafeWindow;
-  } catch {}
-  return window;
-}
+import { getTargetWindow } from './env';
 
 function getPageDocument(): Document {
-  return getPageWindow().document;
+  return getTargetWindow().document;
 }
 
 let originalTitle = '';
 let captchaDetected = false;
-let checkInterval: number | null = null;
 let onCaptchaSolved: (() => void) | null = null;
 
 export function initCaptchaDetector(onSolved: () => void): void {
   onCaptchaSolved = onSolved;
   originalTitle = getPageDocument().title;
-  
-  checkInterval = getPageWindow().setInterval(() => {
+
+  getTargetWindow().setInterval(() => {
     const hasCaptcha = detectCaptcha();
-    
+
     if (hasCaptcha && !captchaDetected) {
       captchaDetected = true;
       notifyUser();
@@ -52,9 +43,9 @@ function detectCaptcha(): boolean {
 
 function notifyUser(): void {
   getPageDocument().title = '⚠️ SOLVE CAPTCHA! ⚠️';
-  
+
   flashTitle();
-  
+
   if ('Notification' in window) {
     if (Notification.permission === 'granted') {
       showNotification();
@@ -66,7 +57,7 @@ function notifyUser(): void {
       });
     }
   }
-  
+
   if (getPageDocument().hidden) {
     try {
       new Audio('data:audio/wav;base64,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').play();
@@ -80,7 +71,7 @@ function showNotification(): void {
     icon: 'https://pixmap.fun/favicon.ico',
     requireInteraction: true,
   });
-  
+
   notification.onclick = () => {
     window.focus();
     notification.close();
@@ -91,7 +82,7 @@ let flashInterval: number | null = null;
 
 function flashTitle(): void {
   if (flashInterval) return;
-  
+
   let showWarning = true;
   flashInterval = window.setInterval(() => {
     if (!captchaDetected) {
@@ -119,16 +110,8 @@ export function isCaptchaActive(): boolean {
 }
 
 export function requestNotificationPermission(): void {
-  const w = getPageWindow();
+  const w = getTargetWindow();
   if ('Notification' in w && Notification.permission === 'default') {
     Notification.requestPermission();
   }
-}
-
-export function stopCaptchaDetector(): void {
-  if (checkInterval) {
-    clearInterval(checkInterval);
-    checkInterval = null;
-  }
-  restoreTitle();
 }
